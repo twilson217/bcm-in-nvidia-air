@@ -117,7 +117,7 @@ sudo service stop isc-dhcp-server
 sudo service isc-dhcp-server status
 ```
 
-4. Start configuring BCM for dhcp and switch / pxe boot
+4. Start configuring BCM for dhcp and switch / pxe boot  
 4.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
 
 ```
