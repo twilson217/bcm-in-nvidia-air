@@ -70,11 +70,11 @@ ONBOOT="yes"
 ```
 ### Add configuration files used by BCM
 
-```
+
 ><fs> touch /root/cm/[node-disk-setup.xml](node-disk-setup.xml)
 ><fs> touch /root/cm/[cm-bright-setup.conf](cm-bright-setup.conf)
 ><fs> touch /etc/[named.conf.global.options.include](named.conf.global.options.include)
-```
+
 
 ### Finish
 Finally unmount the image file and exit. Your image file is ready to be used in BCM environment.
