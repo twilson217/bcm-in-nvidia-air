@@ -85,53 +85,74 @@ Finally unmount the image file and exit. Your image file is ready to be used in 
 ```
 
 ### Upload the image on AIR and share it with yourself to be able to use
-[test-bcm.dot](test-bcm.dot)
+
+Based on [Image Upload Process](https://confluence.nvidia.com/display/NetworkingBU/Image+Upload+Process), upload the image on AIR and make sure image is shared with yourself.
+
+## Starting the Simulation for two leaf switches, two PXE boot servers and BCM
+
+Using the following .dot file and ztp script, start a custom topology and connect using `root/3tango` account credentials to BCM virtual machine. 
+As usual `oob-mgmt-server` has `ubuntu/nvidia` and cumulus switches `cumulus/CumulusLinux!` username password combinations. Once PXE boot and provisioning is sucessful both compute nodes will have the same login credentials (`root/3tango`) as BCM head node.
+
+[test-bcm.dot](test-bcm.dot)  
+[cumulus-ztp.sh](cumulus-ztp.sh)  
 
 
-## Using Preconfigured "bcmh-rocky9u2-10.0-4" image
-With "bcmh-rocky9u2-10.0-4" image we will start from here as above changed are already included in the image file
+### Configuring BCM virtual machine after the first boot
 
-#1 grow vda1 partition to occupy whole virtual disk###############
+1. grow vda1 partition to occupy whole virtual disk (200GB)
+```
 growpart /dev/vda 1
 xfs_growfs /
+```
 
-#2 install BMC10################
-cm-bright-setup -c /root/cm/cm-bright-setup.conf --on-error-action abort
+2. install BMC10 using the following command
+`cm-bright-setup -c /root/cm/cm-bright-setup.conf --on-error-action abort`
 
 
-#3######disable dhcpd service on oob-mgmt-server#######
+3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE data and ZTP data to Cumulus switches.
 
+```
 sudo systemctl disable isc-dhcp-server
 sudo service stop isc-dhcp-server
 sudo service isc-dhcp-server status
+```
 
-#4 Start configuring BMC for dhcp and switch / pxe boot ###
-##4.1 set dhcp gateway to point towards oob-mgmt-server###
+4. Start configuring BCM for dhcp and switch / pxe boot
+4.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
+
+```
+cmsh
 network
 use internalnet
 set gateway 192.168.200.1
 commit
+```
 
-##4.2 configure leaf01 and leaf02 settings from cmsh console
+4.2. configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of leaf01 and leaf02
+
+```
 cmsh
 device
 list
 device add switch leaf01 192.168.200.12
-set mac 48:b0:2d:b9:52:84
+set mac 44:38:39:22:AA:02
 set disablesnmp yes
 set hasclientdaemon yes
 ztpsettings 
 set enableapi yes
 commit
+```
 
-##4.3 configure compute0 and compute1 settings from cmsh console
+4.3. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
+
+```
 cmsh
 device
 list
 device add PhysicalNode compute0 192.168.200.14
-set mac 48:b0:2d:ce:61:02
+set mac 44:38:39:22:AA:04
 commit
-
+```
 
 
 

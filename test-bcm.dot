@@ -13,11 +13,11 @@ graph "bcm-air-poc" {
   "bcm-headnode0":"eth1" -- "fake0":"outbound"
   "bcm-headnode0":"eth0" -- "oob-mgmt-switch":"swp2"
   "oob-mgmt-server":"eth1" -- "oob-mgmt-switch":"swp1"
-  "ubuntu0":"eth0" -- "oob-mgmt-switch":"swp3"
-  "leaf01":"eth0" -- "oob-mgmt-switch":"swp4"
-  "leaf02":"eth0" -- "oob-mgmt-switch":"swp5"
-  "compute0":"eth0" -- "oob-mgmt-switch":"swp6"
-  "compute1":"eth0" -- "oob-mgmt-switch":"swp7"
+  "ubuntu0":"eth0" -- "oob-mgmt-switch":"swp3" [left_mac="44:38:39:22:AA:01"]
+  "leaf01":"eth0" -- "oob-mgmt-switch":"swp4" [left_mac="44:38:39:22:AA:02"]
+  "leaf02":"eth0" -- "oob-mgmt-switch":"swp5" [left_mac="44:38:39:22:AA:03"]
+  "compute0":"eth0" -- "oob-mgmt-switch":"swp6" [left_mac="44:38:39:22:AA:04"]
+  "compute1":"eth0" -- "oob-mgmt-switch":"swp7" [left_mac="44:38:39:22:AA:05"]
   "leaf01":"swp51" -- "leaf02":"swp51"
   "ubuntu0":"eth1" -- "leaf01":"swp1"
   "ubuntu0":"eth2" -- "leaf02":"swp1"
