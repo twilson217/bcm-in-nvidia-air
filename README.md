@@ -71,10 +71,9 @@ ONBOOT="yes"
 ### Add configuration files used by BCM
 
 
-`><fs> touch /root/cm/`[node-disk-setup.xml](node-disk-setup.xml)
-`><fs> touch /root/cm/`[cm-bright-setup.conf](cm-bright-setup.conf)
-`><fs> touch /etc/`[named.conf.global.options.include](named.conf.global.options.include)
-
+`><fs> touch /root/cm/`[node-disk-setup.xml](node-disk-setup.xml) \n
+`><fs> touch /root/cm/`[cm-bright-setup.conf](cm-bright-setup.conf) \n
+`><fs> touch /etc/`[named.conf.global.options.include](named.conf.global.options.include) \n
 
 
 ### Finish
