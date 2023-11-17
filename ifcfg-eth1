@@ -1,0 +1,5 @@
+TYPE="Ethernet"
+BOOTPROTO="dhcp"
+NAME="eth1"
+DEVICE="eth1"
+ONBOOT="yes"
