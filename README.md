@@ -119,10 +119,10 @@ You can check the BCM version installed using the following command on BCM shell
 cmd -v
 ```
 
-As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.
-Therefore the following script must be copied on BCM virtual machine and run to enable nightly builds.
+As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.  
+Therefore the following script must be copied on BCM virtual machine and run to enable nightly builds.  
 [setup-dev-repos.sh](setup-dev-repos.sh)
-After running this script the following commands must be run:
+After running this script the following commands must be run:  
 ```
 # yum clean all
 # yum update cmdaemon base-view
