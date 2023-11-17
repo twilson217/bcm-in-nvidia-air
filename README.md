@@ -37,36 +37,37 @@ sudo virt-sysprep -a bcmh-rocky9u2-10.0-4.qcow2 --password root:password:centos
 
 ### Configure Network Interfaces
 Mount image file from a tool called gustfish
-`sudo guestfish --rw -a CentOS-8-GenericCloud-8.4.2105-20210603.0.x86_64.qcow2`
+`sudo guestfish --rw -a CentOS-8-GenericCloud-8.4.2105-20210603.0.x86_64.qcow2`  
+
 ```
-><fs> run
-><fs> list-filesystems
-><fs> mount /dev/vda1 /
-><fs> touch /etc/sysconfig/ifcfg-eth0
-'''
+><fs> run  
+><fs> list-filesystems  
+><fs> mount /dev/vda1 /  
+><fs> touch /etc/sysconfig/ifcfg-eth0  
+```  
 
 edit `ifcfg-eth0` file using the `vi` editor and configure it with a static IP. This will be our internal interface, looking towards oob management network.
 
 ```
-TYPE="Ethernet"
-BOOTPROTO="static"
-NAME="eth0"
-DEVICE="eth0"
-ONBOOT="yes"
-IPADDR=192.168.200.254
-NETMASK=255.255.255.0
+TYPE="Ethernet"  
+BOOTPROTO="static"  
+NAME="eth0"  
+DEVICE="eth0"  
+ONBOOT="yes"  
+IPADDR=192.168.200.254  
+NETMASK=255.255.255.0  
 ```
 repeat the same process for `ifcfg-eth1`, but configure it to obtain an IP address using DHCP. This will be our external interface, looking towards internet where we can connect from outside world.
 
 ```
 ><fs> touch /etc/sysconfig/ifcfg-eth1
-'''
 ```
-TYPE="Ethernet"
-BOOTPROTO="dhcp"
-NAME="eth1"
-DEVICE="eth1"
-ONBOOT="yes"
+```
+TYPE="Ethernet"  
+BOOTPROTO="dhcp"  
+NAME="eth1"  
+DEVICE="eth1"  
+ONBOOT="yes"  
 ```
 ### Add configuration files used by BCM
 
@@ -79,8 +80,8 @@ ONBOOT="yes"
 ### Finish
 Finally unmount the image file and exit. Your image file is ready to be used in BCM environment.
 ```
-><fs> umount /
-><fs> exit
+><fs> umount /  
+><fs> exit  
 ```
 
 ### Upload the image on AIR and share it with yourself to be able to use
