@@ -113,6 +113,25 @@ If you'd like to change the default root password after the installation, run th
 cm-change-passwd 
 ```
 
+You can check the BCM version installed using the following command on BCM shell:
+
+```
+cmd -v
+```
+
+As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.
+Therefore the following script must be copied on BCM virtual machine and run to enable nightly builds.
+[setup-dev-repos.sh](setup-dev-repos.sh)
+After running this script the following commands must be run:
+```
+# yum clean all
+# yum update cmdaemon base-view
+# yum --installroot /cm/images/default-image clean all
+# yum --installroot /cm/images/default-image update cmdaemon
+# yum --installroot /cm/node-installer clean all
+# yum --installroot /cm/node-installer update cmdaemon-node-installer
+```
+
 3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE data and ZTP data to Cumulus switches.
 
 ```
