@@ -108,6 +108,10 @@ xfs_growfs /
 2. install BMC10 using the following command
 `cm-bright-setup -c /root/cm/cm-bright-setup.conf --on-error-action abort`
 
+If you'd like to change the default root password after the installation, run the following command:
+```
+cm-change-passwd 
+```
 
 3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE data and ZTP data to Cumulus switches.
 
@@ -118,6 +122,7 @@ sudo service isc-dhcp-server status
 ```
 
 4. Start configuring BCM for dhcp and switch / pxe boot  
+
 4.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
 
 ```
@@ -143,7 +148,14 @@ set enableapi yes
 commit
 ```
 
-4.3. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
+4.3. Logon to leaf01 and leaf02 and enable ztp process and reboot the switch:
+
+```
+sudo ztp -e
+sudo reboot
+```
+
+4.4. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
 
 ```
 cmsh
@@ -154,120 +166,19 @@ set mac 44:38:39:22:AA:04
 commit
 ```
 
+4.5. Reboot compute nodes so PXE boot process starts again.
 
+4.6. From BCM `cmsh` command line prompt, check the status of devices and wait till become `UP`
 
+```
+cmsh
+device
+list
+```
 
-
--------------------
-
-localhost login: root
-Password:
-Last failed login: Fri Oct 27 14:57:26 CEST 2023 on ttyS0
-There were 7 failed login attempts since the last successful login.
------------------------------------------------------------------------
-
-    To initialize the cluster, run:
-    cm-bright-setup -c /root/cm/cm-bright-setup.conf
-
------------------------------------------------------------------------
-REMINDER: the LDAP root password needs to be changed.
-REMINDER: the MySQL root password needs to be changed.
-
-To change the LDAP root password:
-  slappasswd -h {SSHA}
-The encrypted password should be inserted into /etc/openldap/slapd.conf
-and OpenLDAP should subsequently be restarted with the following command:
-  /etc/init.d/ldap restart
-
-To change the MySQL root password:
-  mysqladmin -u root -psystem password <new password>
-
-This warning message can be disabled by executing:
-  chmod -x ~/.nag.sh
-Can not stat file '/cm/local/apps/cmd/etc/cluster.pem'
-Could not open file or uri for loading certificate from /cm/local/apps/cmd/etc/cluster.pem
-805B445555150000:error:16000069:STORE routines:ossl_store_get0_loader_int:unregistered scheme:crypto/store/store_register.c:237:scheme=file
-805B445555150000:error:80000002:system library:file_open:No such file or directory:providers/implementations/storemgmt/file_store.c:267:calling stat(/cm/local/apps/cmd/etc/cluster.pem)
-Unable to load certificate
-[root@localhost ~]#
-
-#1### Change all passwords
-[root@localhost ~]# grep system cm/cm-bright-setup.conf 
-      password: system
-cm-change-passwd 
-
-[root@localhost ~]# grep LDAPPass /cm/local/apps/cmd/etc/cmd.conf
-LDAPPass = "system"
-
-#2############
-dhclient eth1
-
-#2############
-ip link set up dev eth0
-ip address flush dev eth0
-ip addr add 192.168.200.254/255.255.255.0 dev eth0
-
-
-####default image doesn't contain these, so if we boot from the default image these things need to be set
-
-
-
-#2 node-disk-setup.xml###############
-/root/cm/node-disk-setup.xml:
-<?xml version='1.0' encoding='ISO-8859-1'?>
-<diskSetup xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'>
-  <device>
-    <blockdev>/dev/vda</blockdev>
-    <blockdev>/dev/sda</blockdev>
-    <partition id='a2'>
-      <size>max</size>
-      <type>linux</type>
-      <filesystem>xfs</filesystem>
-      <mountPoint>/</mountPoint>
-      <mountOptions>defaults,noatime,nodiratime</mountOptions>
-    </partition>
-  </device>
-</diskSetup>
-
-#3 cm-bright-setup.conf###############
-/root/cm/cm-bright-setup.conf:
-modules:
-  brightsetup:
-     bright:
-      admin_email: berkink@nvidia.com
-      hostname: bcm-nv-air
-      license:
-        cluster_name: bcm-nv-air
-        country: US
-        locality: None
-        organization: None
-        product_key: 168102-006594-060341-424224-650932
-        state: None
-        unit: None
-      master_compute_node: false
-      node_count: 1
-      node_disk_setup_path: /root/cm/node-disk-setup.xml
-      node_kernel_modules:
-      - virtio_net
-      - virtio_pci
-      - virtio_blk
-      password: 3tango
-      pbspro_lic_server: ''
-      timezone: Europe/Amsterdam
-      wlm: ''
-      wlm_slot_count: AUTO
-    cloud_type: openstack
-    openstack:
-      head_node_internal_ip: 192.168.200.254
-      internal_cidr: 192.168.200.0/24
-
-#4 dns config file##############
-/etc/named.conf.global.options.include
-dnssec-validation no;
-dnssec-enable no;
-dnssec-lookaside yes;
-
-service named restart
-
-
-
+The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
+After this step, BCM GUI can be accessible from the following URLs:
+```
+https://<worker_url>:<tcp_port>/userportal
+https://<worker_url>:<tcp_port>/base-view
+```
