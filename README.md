@@ -6,6 +6,8 @@ BCM images are provisioned using cloud-init for network configuration and setup 
 Therefore as a workaound we are deploying BCM cluster ourselves and maintaining the BCM image on AIR platform by ourselves.
 
 ## BCM Versioning and builds
+| version     | package and build                                  | release date                         |                                                    |
+| ----------- | -------------------------------------------------- |------------------------------------- |--------------------------------------------------- |
 |10.23.09     | cmdaemon-10.0-156496_cm10.0_ab4640c657.x86_64.rpm  |  Thu 31 Aug 2023 10:18:36 PM CEST    | <-- yours, very old                                |
 |10.23.10 +   | cmdaemon-10.0-156589_cm10.0_bb168b4afc.x86_64.rpm  |  Tue 10 Oct 2023 11:27:30 PM CEST    | <-- current public                                 |
 |10.23.11 *   | cmdaemon-10.0-156710_cm10.0_403a48ce38.x86_64.rpm  |  Tue 07 Nov 2023 07:28:13 PM CET     | <-- the one we're QA-ing now (and we should use)   |
