@@ -101,7 +101,7 @@ As usual `oob-mgmt-server` has `ubuntu/nvidia` and cumulus switches `cumulus/Cum
 
 1. grow vda1 partition to occupy whole virtual disk (200GB)
 ```
-growpart /dev/vda 1
+growpart /dev/vda 1  
 xfs_growfs /
 ```
 
@@ -136,7 +136,7 @@ After running this script the following commands must be run:
 
 ```
 sudo systemctl disable isc-dhcp-server
-sudo service stop isc-dhcp-server
+sudo service isc-dhcp-server stop
 sudo service isc-dhcp-server status
 ```
 
