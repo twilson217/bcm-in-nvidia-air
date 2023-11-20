@@ -125,9 +125,9 @@ Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: This binary was compiled on Oct 10 
 ```
 
 As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.  
-Therefore the following script must be copied on BCM virtual machine and run to enable nightly builds.  
+Therefore the following script must be run on BCM virtual machine to enable nightly builds.  
 [setup-dev-repos.sh](setup-dev-repos.sh)  
-Run the script using the following prompt:
+It's alread copied under `/root` folder, so run the script using the following prompt:
 ```
 [root@localhost ~]# bash setup-dev-repos.sh
 === / (10.0) ===
