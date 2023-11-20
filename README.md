@@ -172,7 +172,7 @@ set gateway 192.168.200.1
 commit
 ```
 
-4.2. configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we reserved the following IP / MAC addresses for each node:
+4.2. Configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we reserved the following IP / MAC addresses for each node:
 
 | Node name     | interface | IP address        |  MAC address        |
 | ------------- | --------- |------------------ |-------------------- |
@@ -182,6 +182,8 @@ commit
 | compute1      | eth0      |  192.168.200.15   | 44:38:39:22:AA:05   |
 | BCM           | eth0      |  192.168.200.254  | random              |
 
+
+Configure the following parameters on BCM for leaf01:
 ```
 device
 list
@@ -194,15 +196,15 @@ set enableapi yes
 commit
 ```
 
-4.3. Logon to leaf01 and leaf02 and enable ztp process and reboot the switch:
+Logon to leaf01 and enable ztp process and reboot the switch:
 
 ```
 sudo ztp -e
 sudo reboot
 ```
 
-4.4. Repeat the same process for leaf02
-on BCM:
+4.3. Repeat the same process for leaf02 on BCM:
+
 ```
 device
 list
@@ -222,7 +224,7 @@ sudo reboot
 ```
 
 
-4.5. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
+4.4. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
 
 ```
 device
@@ -237,9 +239,9 @@ device add PhysicalNode compute1 192.168.200.15
 set mac 44:38:39:22:AA:05
 commit
 ```
-4.6. Reboot compute nodes so PXE boot process starts again.
+4.5. Reboot compute nodes so PXE boot process starts again.
 
-4.7. From BCM `cmsh` command line prompt, check the status of devices and wait till become `UP`
+4.6. From BCM `cmsh` command line prompt, check the status of devices and wait till become `UP`
 
 ```
 device
@@ -290,7 +292,7 @@ For switches at first you will see "BOOTING", then after ZTP process completes a
 For compute nodes in the first stages of PXE boot you will see "BOOTING", then "INSTALLING", "INSTALLER_CALLINGINIT" and finally "UP"
 
 
-4.8. The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
+4.7. The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
 After this step, BCM GUI can be accessible from the following URLs:
 ```
 https://<worker_url>:<tcp_port>/userportal
