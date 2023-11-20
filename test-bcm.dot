@@ -2,7 +2,7 @@ graph "bcm-air-poc" {
   "oob-mgmt-server"  [function="oob-server" cpu="2" memory="2048"]
   "oob-mgmt-switch"  [function="oob-switch" mgmt_ip="192.168.200.251"]
 
-  "bcm-headnode0" [memory="4096" os="bcmh-rocky9u2-10.0-4" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
+  "bcm-headnode0" [memory="4096" os="bcmh-rocky9u2_10.0-4" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
   "compute0" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.14"]
   "compute1" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.15"]
   "ubuntu0" [function="server" memory="1024" os="generic/ubuntu1804" cpu="1" mgmt_ip="192.168.200.10"]
