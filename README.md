@@ -157,11 +157,15 @@ sudo service isc-dhcp-server status
 ```
 
 4. Start configuring BCM for dhcp and switch / pxe boot  
+In order to configure things on BCM first you need to be on BCM console, type the following command on BCM shell:  
+```
+[root@localhost ~]# cmsh
+[bcm-nv-air]%
+```
 
 4.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
 
 ```
-cmsh
 network
 use internalnet
 set gateway 192.168.200.1
@@ -171,7 +175,6 @@ commit
 4.2. configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of leaf01 and leaf02
 
 ```
-cmsh
 device
 list
 device add switch leaf01 192.168.200.12
@@ -190,28 +193,96 @@ sudo ztp -e
 sudo reboot
 ```
 
-4.4. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
+4.4. Repeat the same process for leaf02
+on BCM:
+```
+device
+list
+device add switch leaf02 192.168.200.13
+set mac 44:38:39:22:AA:03
+set disablesnmp yes
+set hasclientdaemon yes
+ztpsettings 
+set enableapi yes
+commit
+```
+
+on leaf02 console:
+```
+sudo ztp -e
+sudo reboot
+```
+
+
+4.5. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
 
 ```
-cmsh
 device
 list
 device add PhysicalNode compute0 192.168.200.14
 set mac 44:38:39:22:AA:04
 commit
 ```
+then add compute1
+```
+device add PhysicalNode compute1 192.168.200.15
+set mac 44:38:39:22:AA:05
+commit
+```
+4.6. Reboot compute nodes so PXE boot process starts again.
 
-4.5. Reboot compute nodes so PXE boot process starts again.
-
-4.6. From BCM `cmsh` command line prompt, check the status of devices and wait till become `UP`
+4.7. From BCM `cmsh` command line prompt, check the status of devices and wait till become `UP`
 
 ```
-cmsh
 device
 list
+[bcm-nv-air->device]% list
+Type                   Hostname (key)   MAC                Category         Ip              Network        Status
+---------------------- ---------------- ------------------ ---------------- --------------- -------------- --------------------------------
+HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
+PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
+Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
+Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [       BOOTING       ] (/switc+
 ```
 
-The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
+```
+Type                   Hostname (key)   MAC                Category         Ip              Network        Status
+---------------------- ---------------- ------------------ ---------------- --------------- -------------- --------------------------------
+HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
+PhysicalNode           compute0         44:38:39:22:AA:04  default          192.168.200.14  internalnet    [     INSTALLING      ] (provis+
+PhysicalNode           compute1         44:38:39:22:AA:05  default          192.168.200.15  internalnet    [  DOWN  ]
+PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
+Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
+Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [   UP   ]
+```
+
+```
+Type                   Hostname (key)   MAC                Category         Ip              Network        Status
+---------------------- ---------------- ------------------ ---------------- --------------- -------------- --------------------------------
+HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
+PhysicalNode           compute0         44:38:39:22:AA:04  default          192.168.200.14  internalnet    [ INSTALLER_CALLINGINIT ] (swit+
+PhysicalNode           compute1         44:38:39:22:AA:05  default          192.168.200.15  internalnet    [  DOWN  ]
+PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
+Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
+Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [   UP   ]
+```
+
+```
+Type                   Hostname (key)   MAC                Category         Ip              Network        Status
+---------------------- ---------------- ------------------ ---------------- --------------- -------------- -----------------------
+HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
+PhysicalNode           compute0         44:38:39:22:AA:04  default          192.168.200.14  internalnet    [   UP   ]
+PhysicalNode           compute1         44:38:39:22:AA:05  default          192.168.200.15  internalnet    [  DOWN  ]
+PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
+Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
+Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [   UP   ]
+```
+
+For switches at first you will see "BOOTING", then after ZTP process completes and registers cm-lite-daemon service, you will see "UP". This might take a couple of minutes depending on your network speed.
+For compute nodes in the first stages of PXE boot you will see "BOOTING", then "INSTALLING", "INSTALLER_CALLINGINIT" and finally "UP"
+
+
+4.8. The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
 After this step, BCM GUI can be accessible from the following URLs:
 ```
 https://<worker_url>:<tcp_port>/userportal
