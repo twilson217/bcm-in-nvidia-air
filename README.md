@@ -148,7 +148,7 @@ yum --installroot /cm/node-installer clean all -y
 yum --installroot /cm/node-installer update cmdaemon-node-installer -y
 ```
 
-3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE data and ZTP data to Cumulus switches.
+3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE info and ZTP script to Cumulus switches.
 
 ```
 sudo systemctl disable isc-dhcp-server
@@ -172,7 +172,15 @@ set gateway 192.168.200.1
 commit
 ```
 
-4.2. configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of leaf01 and leaf02
+4.2. configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we reserved the following IP / MAC addresses for each node:
+
+| Node name     | interface | IP address        |  MAC address        |
+| ------------- | --------- |------------------ |-------------------- |
+| leaf01        | eth0      |  192.168.200.12   | 44:38:39:22:AA:02   |
+| leaf02        | eth0      |  192.168.200.13   | 44:38:39:22:AA:03   |
+| compute0      | eth0      |  192.168.200.14   | 44:38:39:22:AA:04   |
+| compute1      | eth0      |  192.168.200.15   | 44:38:39:22:AA:05   |
+| BCM           | eth0      |  192.168.200.254  | random              |
 
 ```
 device
