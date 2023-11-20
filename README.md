@@ -1,3 +1,5 @@
+<!-- AIR:tour -->
+
 # How to setup BCM on AIR environment and make it functional
 
 This document intends to explain how to get BCM operational and basics of onboarding a Cumulus switch and a PXE boot server on AIR environment.
@@ -309,3 +311,94 @@ After this step, BCM GUI can be accessible from the following URLs:
 https://<worker_url>:<tcp_port>/userportal
 https://<worker_url>:<tcp_port>/base-view
 ```
+
+<!-- AIR:page -->
+
+If you'd like to enable air_agent on BCM machine so that you can control the virtual machine using AIR SDK, please clone the air_sdk repository and install it.
+
+```
+[root@localhost ~]# git clone https://github.com/NVIDIA/air_agent.git
+Cloning into 'air_agent'...
+remote: Enumerating objects: 590, done.
+remote: Counting objects: 100% (360/360), done.
+remote: Compressing objects: 100% (163/163), done.
+remote: Total 590 (delta 255), reused 288 (delta 195), pack-reused 230
+Receiving objects: 100% (590/590), 186.76 KiB | 2.92 MiB/s, done.
+Resolving deltas: 100% (333/333), done.
+[root@localhost ~]# cd air_agent/
+
+[root@localhost air_agent]# ./install.sh
+####################################
+# Installing pip requirements      #
+####################################
+Processing /root/air_agent
+  DEPRECATION: A future pip version will change local packages to be built in-place without first copying to a temporary directory. We recommend you use --use-feature=in-tree-build to test your packages with this new behavior before it becomes the default.
+   pip 21.3 will remove support for this functionality. You can find discussion regarding this at https://github.com/pypa/pip/issues/7555.
+  Installing build dependencies ... done
+  Getting requirements to build wheel ... done
+    Preparing wheel metadata ... done
+Collecting cryptography==41.0.3
+  Downloading cryptography-41.0.3-cp37-abi3-manylinux_2_28_x86_64.whl (4.3 MB)
+     |████████████████████████████████| 4.3 MB 6.7 MB/s
+Collecting requests==2.31.0
+  Downloading requests-2.31.0-py3-none-any.whl (62 kB)
+     |████████████████████████████████| 62 kB 5.0 MB/s
+Collecting gitpython==3.1.35
+  Downloading GitPython-3.1.35-py3-none-any.whl (188 kB)
+     |████████████████████████████████| 188 kB 76.7 MB/s
+Requirement already satisfied: cffi>=1.12 in /usr/lib64/python3.9/site-packages (from cryptography==41.0.3->agent==3.0.2) (1.14.5)
+Collecting gitdb<5,>=4.0.1
+  Downloading gitdb-4.0.11-py3-none-any.whl (62 kB)
+     |████████████████████████████████| 62 kB 5.8 MB/s
+Requirement already satisfied: idna<4,>=2.5 in /usr/lib/python3.9/site-packages (from requests==2.31.0->agent==3.0.2) (2.10)
+Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/lib/python3.9/site-packages (from requests==2.31.0->agent==3.0.2) (1.26.5)
+Collecting certifi>=2017.4.17
+  Downloading certifi-2023.11.17-py3-none-any.whl (162 kB)
+     |████████████████████████████████| 162 kB 107.3 MB/s
+Collecting charset-normalizer<4,>=2
+  Downloading charset_normalizer-3.3.2-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (142 kB)
+     |████████████████████████████████| 142 kB 70.6 MB/s
+Requirement already satisfied: pycparser in /usr/lib/python3.9/site-packages (from cffi>=1.12->cryptography==41.0.3->agent==3.0.2) (2.20)
+Collecting smmap<6,>=3.0.1
+  Downloading smmap-5.0.1-py3-none-any.whl (24 kB)
+Requirement already satisfied: ply==3.11 in /usr/lib/python3.9/site-packages (from pycparser->cffi>=1.12->cryptography==41.0.3->agent==3.0.2) (3.11)
+Building wheels for collected packages: agent
+  Building wheel for agent (PEP 517) ... done
+  Created wheel for agent: filename=agent-3.0.2-py3-none-any.whl size=12675 sha256=0f69636ca17cdb4c9f0238023cd9c7483c532058d01ab010786c08ed08cae8bf
+  Stored in directory: /tmp/pip-ephem-wheel-cache-wk_0ry9m/wheels/50/d2/4c/f2c8aad5fb8ab176c6ef4a732c23184494bb4dc8f43a02d0f2
+Successfully built agent
+Installing collected packages: smmap, gitdb, charset-normalizer, certifi, requests, gitpython, cryptography, agent
+Successfully installed agent-3.0.2 certifi-2023.11.17 charset-normalizer-3.3.2 cryptography-41.0.3 gitdb-4.0.11 gitpython-3.1.35 requests-2.31.0 smmap-5.0.1
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+Done!
+####################################
+# Installing air-agent             #
+####################################
+Done!
+####################################
+# Enabling systemd service         #
+####################################
+Created symlink /etc/systemd/system/multi-user.target.wants/air-agent.service → /etc/systemd/system/air-agent.service.
+Done!
+[root@localhost air_agent]# ps -ef | grep air
+root       71805       1  1 12:12 ?        00:00:00 /usr/bin/python3 /usr/local/lib/air-agent/agent.py
+root       86919    1841  0 12:12 pts/0    00:00:00 grep --color=auto air
+[root@localhost air_agent]# more /var/log/air-agent.log
+2023-11-20 12:12:10,901 INFO Syncing clock from hypervisor
+2023-11-20 12:12:12,010 INFO Restarting chronyd.service
+2023-11-20 12:12:12,053 INFO Checking for updates
+2023-11-20 12:12:12,247 INFO Initializing with identity b863bbde-8ebe-4bcc-91ae-3906a0cf3c7d
+2023-11-20 12:12:12,250 WARNING Platform detection failed to determine OS
+2023-11-20 12:12:12,250 INFO Starting Air Agent daemon v3.0.2
+[root@localhost air_agent]# more /var/log/air-agent.log
+2023-11-20 12:12:10,901 INFO Syncing clock from hypervisor
+2023-11-20 12:12:12,010 INFO Restarting chronyd.service
+2023-11-20 12:12:12,053 INFO Checking for updates
+2023-11-20 12:12:12,247 INFO Initializing with identity b863bbde-8ebe-4bcc-91ae-3906a0cf3c7d
+2023-11-20 12:12:12,250 WARNING Platform detection failed to determine OS
+2023-11-20 12:12:12,250 INFO Starting Air Agent daemon v3.0.2
+[root@localhost air_agent]#
+
+```
+
+<!-- AIR:page -->
