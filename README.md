@@ -116,20 +116,36 @@ cm-change-passwd
 You can check the BCM version installed using the following command on BCM shell:
 
 ```
-cmd -v
+[root@localhost ~]# cmd -v
+Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CMDaemon version 3.0 (156589_bb168b4afc)  <==== Current build in the qcow2 image uploaded on AIR
+Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CM version 10.0
+Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CM API hash 1e4d7b993d8f2a4d8fb375eced4e0f8ccc31b8818bdb8f8d319642778aafc42fabc47726c74929effa60ccaccff5f7fec4d07fb5668efd2a000c3d7e5d7c51eb
+Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: This binary was compiled on Oct 10 2023, 23:22:18
+
 ```
 
 As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.  
 Therefore the following script must be copied on BCM virtual machine and run to enable nightly builds.  
-[setup-dev-repos.sh](setup-dev-repos.sh)
+[setup-dev-repos.sh](setup-dev-repos.sh)  
+Run the script using the following prompt:
+```
+[root@localhost ~]# bash setup-dev-repos.sh
+=== / (10.0) ===
+=== /cm/node-installer ===
+=== /cm/images/default-image ===
+=== 1804 ===
+=== 2004 ===
+=== 2204 ===
+```
+
 After running this script the following commands must be run:  
 ```
-# yum clean all
-# yum update cmdaemon base-view
-# yum --installroot /cm/images/default-image clean all
-# yum --installroot /cm/images/default-image update cmdaemon
-# yum --installroot /cm/node-installer clean all
-# yum --installroot /cm/node-installer update cmdaemon-node-installer
+yum clean all
+yum update cmdaemon base-view -y
+yum --installroot /cm/images/default-image clean all -y
+yum --installroot /cm/images/default-image update cmdaemon -y
+yum --installroot /cm/node-installer clean all -y
+yum --installroot /cm/node-installer update cmdaemon-node-installer -y
 ```
 
 3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE data and ZTP data to Cumulus switches.
