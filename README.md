@@ -224,7 +224,7 @@ sudo reboot
 ```
 
 
-4.4. configure compute0 and compute1 settings from cmsh console, to achieve this step, we need to know the MAC address of eth0 interface of compute0 and compute1
+4.4. Configure compute0 and compute1 settings from cmsh console, to achieve this step, we already know the MAC address of eth0 interfaces of both nodes from our table above
 
 ```
 device
