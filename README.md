@@ -148,6 +148,17 @@ yum --installroot /cm/node-installer clean all -y
 yum --installroot /cm/node-installer update cmdaemon-node-installer -y
 ```
 
+After nightly build upgrades, as of this documents writing, we can observe the build number as follows:
+
+```
+[root@localhost ~]# cmd -v
+Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: CMDaemon version 3.0 (156809_649e91203c)
+Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: CM version 10.0
+Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: CM API hash 1e4d7b993d8f2a4d8fb375eced4e0f8ccc31b8818bdb8f8d319642778aafc42fabc47726c74929effa60ccaccff5f7fec4d07fb5668efd2a000c3d7e5d7c51eb
+Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: This binary was compiled on Nov 17 2023, 22:29:41
+
+```
+
 3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE info and ZTP script to Cumulus switches.
 
 ```
