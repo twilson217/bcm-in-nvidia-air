@@ -241,7 +241,7 @@ commit
 ```
 4.5. Reboot compute nodes so PXE boot process starts again.
 
-4.6. From BCM `cmsh` command line prompt, check the status of devices and wait till become `UP`
+4.6. From BCM `cmsh` command line prompt, check the status of devices and wait till they become `UP`
 
 ```
 device
