@@ -21,8 +21,10 @@ Therefore as a workaound we are deploying BCM cluster ourselves and maintaining 
 The latest GA version of BCM 10.23.10 can be obtained from the following link  
 https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-4.img.gz  
 https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-8.img.gz  
+
+`https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/imagerepo.yaml` file includes all the versions and builds for corresponding image file
   
-  
+
 
 As per AIR documentation on how to upload and maintain image files, details are explained in [Image Upload Process](https://confluence.nvidia.com/display/NetworkingBU/Image+Upload+Process):
 We are only allowed to upload a qcow2 or iso format, we must convert this .img.gz into a qcow2 image format.
