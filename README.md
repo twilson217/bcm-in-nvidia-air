@@ -33,19 +33,19 @@ Since I'm using Windows with WSL, I first downloaded the image and using 7-zip I
 Then, copy the file on WSL linux partition and converted the image to qcow2 format.
 
 ### Convert to qcow2
-`sudo qemu-img convert -f raw -O qcow2 bcmh-rocky9u2-10.0-4.img bcmh-rocky9u2-10.0-4.qcow2`
+`sudo qemu-img convert -f raw -O qcow2 bcmh-rocky9u2-10.0-8.img bcmh-rocky9u2-10.0-8.qcow2`
 
 ### Set root password
 As I already know (by experience) this image file doesn't have a root password set and any of the network interfaces configured, I plan to use external tools to mount the image file and do this very basic configuration offline, without booting the image file. Follow the instructions from AIR documentation on [Working with qcow2 images](https://confluence.nvidia.com/display/NetworkingBU/Working+with+qcow2+images)
 ```
 sudo apt install -y linux-image-generic
 sudo apt install -y guestfs-tools
-sudo virt-sysprep -a bcmh-rocky9u2-10.0-4.qcow2 --password root:password:centos
+sudo virt-sysprep -a bcmh-rocky9u2-10.0-8.qcow2 --password root:password:centos
 ```
 
 ### Configure Network Interfaces
 Mount image file from a tool called gustfish
-`sudo guestfish --rw -a CentOS-8-GenericCloud-8.4.2105-20210603.0.x86_64.qcow2`  
+`sudo guestfish --rw -a bcmh-rocky9u2-10.0-8.qcow2`  
 
 ```
 ><fs> run  
