@@ -19,9 +19,11 @@ Therefore as a workaound we are deploying BCM cluster ourselves and maintaining 
 ## Installation and image configuration from scratch
 
 ### Download image
-The latest GA version of BCM 10.23.10 can be obtained from the following link  
+Previous versions of BCM10  
 https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-4.img.gz  
 https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-8.img.gz  
+
+The latest GA version of BCM 10.24.03 can be obtained from the following link  
 https://s3.us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u3-10.0-2.img.gz
 
 `https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/imagerepo.yaml` file includes all the versions and builds for corresponding image file
