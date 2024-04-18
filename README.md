@@ -14,6 +14,7 @@ Therefore as a workaound we are deploying BCM cluster ourselves and maintaining 
 |10.23.10 +   | cmdaemon-10.0-156589_cm10.0_bb168b4afc.x86_64.rpm  |  Tue 10 Oct 2023 11:27:30 PM CEST    |                                  |
 |10.23.11     | cmdaemon-10.0-156713_cm10.0_14e56b67c0.x86_64.rpm  |  Tue 14 Nov 2023 09:05:48 PM CET     |                                  |
 |10.23.12 *+  | cmdaemon-10.0-156921_cm10.0_5d3db827b4.x86_64.rpm  |  Thu 07 Dec 2023 07:04:39 PM CET     |                                  |
+|10.24.03     | bcmh-rocky9u3-10.0-2.img.gz                        |                                      |                                  |  
 
 ## Installation and image configuration from scratch
 
@@ -21,6 +22,7 @@ Therefore as a workaound we are deploying BCM cluster ourselves and maintaining 
 The latest GA version of BCM 10.23.10 can be obtained from the following link  
 https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-4.img.gz  
 https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-8.img.gz  
+https://s3.us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u3-10.0-2.img.gz
 
 `https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/imagerepo.yaml` file includes all the versions and builds for corresponding image file
   
@@ -50,8 +52,8 @@ Mount image file from a tool called gustfish
 ```
 ><fs> run  
 ><fs> list-filesystems  
-><fs> mount /dev/vda1 /  
-><fs> touch /etc/sysconfig/ifcfg-eth0  
+><fs> mount /dev/sda1 /  
+><fs> touch /etc/sysconfig/network-scripts/ifcfg-eth0  
 ```  
 
 edit `ifcfg-eth0` file using the `vi` editor and configure it with a static IP. This will be our internal interface, looking towards oob management network.
@@ -68,7 +70,7 @@ NETMASK=255.255.255.0
 repeat the same process for `ifcfg-eth1`, but configure it to obtain an IP address using DHCP. This will be our external interface, looking towards internet where we can connect from outside world.
 
 ```
-><fs> touch /etc/sysconfig/ifcfg-eth1
+><fs> touch /etc/sysconfig/network-scripts/ifcfg-eth1
 ```
 ```
 TYPE="Ethernet"  
