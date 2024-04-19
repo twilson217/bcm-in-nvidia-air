@@ -135,7 +135,7 @@ Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CM API hash 1e4d7b993d8f2a4d8fb375e
 Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: This binary was compiled on Oct 10 2023, 23:22:18
 
 ```
-
+3. [OPTIONAL STEP FOR NON-GA BCM INSTLLATION - skip if you are using a GA version of BCM] Adding daily build repositories in BCM headnode
 As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.  
 Therefore the following script must be run on BCM virtual machine to enable nightly builds.  
 [setup-dev-repos.sh](setup-dev-repos.sh)  
@@ -171,7 +171,7 @@ Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: This binary was compiled on Nov 17 
 
 ```
 
-3. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE info and ZTP script to Cumulus switches.
+4. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE info and ZTP script to Cumulus switches.
 
 ```
 sudo systemctl disable isc-dhcp-server
@@ -179,14 +179,14 @@ sudo service isc-dhcp-server stop
 sudo service isc-dhcp-server status
 ```
 
-4. Start configuring BCM for dhcp and switch / pxe boot  
+5. Start configuring BCM for dhcp and switch / pxe boot  
 In order to configure things on BCM first you need to be on BCM console, type the following command on BCM shell:  
 ```
 [root@localhost ~]# cmsh
 [bcm-nv-air]%
 ```
 
-4.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
+5.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
 
 ```
 network
@@ -195,7 +195,7 @@ set gateway 192.168.200.1
 commit
 ```
 
-4.2. Configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we reserved the following IP / MAC addresses for each node:
+5.2. Configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we reserved the following IP / MAC addresses for each node:
 
 | Node name     | interface | IP address        |  MAC address        |
 | ------------- | --------- |------------------ |-------------------- |
@@ -226,7 +226,7 @@ sudo ztp -e
 sudo reboot
 ```
 
-4.3. Repeat the same process for leaf02 on BCM:
+5.3. Repeat the same process for leaf02 on BCM:
 
 ```
 device
@@ -247,7 +247,7 @@ sudo reboot
 ```
 
 
-4.4. Configure compute0 and compute1 settings from cmsh console, to achieve this step, we already know the MAC address of eth0 interfaces of both nodes from the table above
+5.4. Configure compute0 and compute1 settings from cmsh console, to achieve this step, we already know the MAC address of eth0 interfaces of both nodes from the table above
 
 ```
 device
@@ -262,9 +262,9 @@ device add PhysicalNode compute1 192.168.200.15
 set mac 44:38:39:22:AA:05
 commit
 ```
-4.5. Reboot compute nodes so PXE boot process starts again.
+5.5. Reboot compute nodes so PXE boot process starts again.
 
-4.6. From BCM `cmsh` command line prompt, check the status of devices and wait till they become `UP`
+5.6. From BCM `cmsh` command line prompt, check the status of devices and wait till they become `UP`
 
 ```
 device
@@ -315,7 +315,7 @@ For switches at first you will see "BOOTING", then after ZTP process completes a
 For compute nodes in the first stages of PXE boot you will see "BOOTING", then "INSTALLING", "INSTALLER_CALLINGINIT" and finally "UP"
 
 
-4.7. The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
+5.7. The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
 After this step, BCM GUI can be accessible from the following URLs:
 ```
 https://<worker_url>:<tcp_port>/userportal
@@ -324,7 +324,7 @@ https://<worker_url>:<tcp_port>/base-view
 
 <!-- AIR:page -->
 
-If you'd like to enable air_agent on BCM machine so that you can control the virtual machine using AIR SDK, please clone the air_sdk repository and install it.
+6. If you'd like to enable air_agent on BCM machine so that you can control the virtual machine using AIR SDK, please clone the air_sdk repository and install it.
 
 ```
 [root@localhost ~]# git clone https://github.com/NVIDIA/air_agent.git
