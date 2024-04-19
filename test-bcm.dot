@@ -6,8 +6,8 @@ graph "bcm-air-poc" {
   "compute0" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.14"]
   "compute1" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.15"]
   "ubuntu0" [function="server" memory="1024" os="generic/ubuntu1804" cpu="1" mgmt_ip="192.168.200.10"]
-  "leaf01" [function="leaf" memory="1024" os="cumulus-vx-5.6.0" cpu="1" mgmt_ip="192.168.200.12"]
-  "leaf02" [function="leaf" memory="1024" os="cumulus-vx-5.6.0" cpu="1" mgmt_ip="192.168.200.13"]
+  "leaf01" [function="leaf" memory="1024" os="cumulus-vx-5.8.0" cpu="1" mgmt_ip="192.168.200.12"]
+  "leaf02" [function="leaf" memory="1024" os="cumulus-vx-5.8.0" cpu="1" mgmt_ip="192.168.200.13"]
   "fake0" [function="fake" os="CumulusCommunity/cumulus-vx" version="5.6.0" mgmt_ip="192.168.200.11"]
 
   "bcm-headnode0":"eth1" -- "fake0":"outbound"
