@@ -135,7 +135,8 @@ Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CM API hash 1e4d7b993d8f2a4d8fb375e
 Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: This binary was compiled on Oct 10 2023, 23:22:18
 
 ```
-3. [OPTIONAL STEP FOR NON-GA BCM INSTLLATION - skip if you are using a GA version of BCM] Adding daily build repositories in BCM headnode
+3. [OPTIONAL STEP FOR NON-GA BCM INSTLLATION - skip if you are using a GA version of BCM] Adding daily build repositories in BCM headnode:  
+
 As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.  
 Therefore the following script must be run on BCM virtual machine to enable nightly builds.  
 [setup-dev-repos.sh](setup-dev-repos.sh)  
