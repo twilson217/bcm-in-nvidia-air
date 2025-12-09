@@ -537,12 +537,16 @@ class AirBCMDeployer:
     def enable_ssh_service(self):
         """
         Enable SSH service for the simulation using the Air SDK.
-        Creates an SSH service on oob-mgmt-server:eth0 port 22.
+        Creates an SSH service directly on the BCM head node (eth0 port 22).
+        
+        This allows direct SSH access to BCM without going through oob-mgmt-server,
+        which avoids password configuration issues with Air-managed nodes.
         
         Returns:
             Service object if successful, None otherwise
         """
         print("\nEnabling SSH service for simulation...")
+        print(f"  Creating SSH service on {self.bcm_node_name}:eth0...")
         
         try:
             from air_sdk import AirApi
@@ -557,11 +561,11 @@ class AirBCMDeployer:
             # Get the simulation object
             sim = air.simulations.get(self.simulation_id)
             
-            # Create SSH service on oob-mgmt-server:eth0
-            # This exposes port 22 via Air's worker nodes
+            # Create SSH service directly on BCM head node
+            # This bypasses oob-mgmt-server and its password issues
             service = sim.create_service(
-                name='ssh',
-                interface='oob-mgmt-server:eth0',
+                name='bcm-ssh',
+                interface=f'{self.bcm_node_name}:eth0',
                 dest_port=22,
                 service_type='ssh'
             )
@@ -580,7 +584,7 @@ class AirBCMDeployer:
     
     def get_ssh_service_info(self):
         """
-        Get SSH service details for the oob-mgmt-server
+        Get SSH service details for the BCM head node
         
         Returns:
             dict with 'hostname', 'port', 'username', and 'link' for SSH access
@@ -600,14 +604,14 @@ class AirBCMDeployer:
                 # v1 API can return list directly or dict with results
                 services = data if isinstance(data, list) else data.get('results', [])
                 
-                # Look for SSH service for oob-mgmt-server
+                # Look for SSH service for BCM head node
                 for service in services:
                     if (service.get('service_type') == 'ssh' and 
-                        service.get('node_name') == 'oob-mgmt-server'):
+                        service.get('node_name') == self.bcm_node_name):
                         return {
                             'hostname': service.get('host'),
                             'port': service.get('src_port'),  # src_port is the external port
-                            'username': service.get('os_default_username', 'ubuntu'),
+                            'username': 'root',  # BCM uses root, configured via cloud-init
                             'link': service.get('link'),
                             'service_id': service.get('id')
                         }
@@ -833,7 +837,7 @@ puts "✓ OOB server password configured"
     
     def create_ssh_config(self, ssh_info, simulation_name):
         """
-        Create .ssh/config file for easy SSH access to simulation nodes
+        Create .ssh/config file for easy SSH access to BCM head node
         
         Args:
             ssh_info: dict with 'hostname' and 'port' from get_ssh_service_info()
@@ -853,40 +857,33 @@ puts "✓ OOB server password configured"
         # Use simulation name for config file
         config_filename = simulation_name.replace(' ', '-')
         
-        # Create config content
+        # Create config content - direct connection to BCM head node
         config_content = f"""# NVIDIA Air Simulation SSH Configuration
 # Simulation: {simulation_name}
 # Simulation ID: {self.simulation_id}
 # Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
-
-Host air-oob
-  HostName {ssh_info['hostname']}
-  Port {ssh_info['port']}
-  User ubuntu
-  PreferredAuthentications publickey
-  IdentityFile ~/.ssh/id_rsa
-  StrictHostKeyChecking no
-  UserKnownHostsFile /dev/null
+#
+# SSH service is configured directly on the BCM head node.
+# Password configured via cloud-init: {self.default_password}
 
 Host air-{self.bcm_node_name}
-  HostName {self.bcm_node_name}
+  HostName {ssh_info['hostname']}
+  Port {ssh_info['port']}
   User root
-  ProxyJump air-oob
   PreferredAuthentications publickey,password
   IdentityFile ~/.ssh/id_rsa
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
-  # Password: {self.default_password}
 
-# Additional nodes (add as needed):
-# Host air-compute0
-#   HostName compute0
-#   User root
-#   ProxyJump air-oob
-#   PreferredAuthentications publickey,password
-#   IdentityFile ~/.ssh/id_rsa
-#   StrictHostKeyChecking no
-#   UserKnownHostsFile /dev/null
+# Alias for convenience
+Host bcm
+  HostName {ssh_info['hostname']}
+  Port {ssh_info['port']}
+  User root
+  PreferredAuthentications publickey,password
+  IdentityFile ~/.ssh/id_rsa
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
 """
         
         # Write config file
@@ -895,11 +892,13 @@ Host air-{self.bcm_node_name}
         config_file.chmod(0o600)
         
         print(f"  ✓ SSH config created: {config_file}")
-        print(f"\n  To access nodes:")
-        print(f"    ssh -F {config_file} air-oob                     # OOB management server")
-        print(f"    ssh -F {config_file} air-{self.bcm_node_name}   # BCM head node")
+        print(f"\n  To access BCM head node:")
+        print(f"    ssh -F {config_file} air-{self.bcm_node_name}")
+        print(f"    ssh -F {config_file} bcm")
         print(f"\n  Connection details:")
-        print(f"    Worker: {ssh_info['hostname']}:{ssh_info['port']}")
+        print(f"    Host: {ssh_info['hostname']}")
+        print(f"    Port: {ssh_info['port']}")
+        print(f"    User: root")
         print(f"    Password: {self.default_password}")
         
         return config_file
