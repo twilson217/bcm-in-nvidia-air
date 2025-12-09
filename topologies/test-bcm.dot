@@ -16,6 +16,7 @@ graph "bcm-air-poc" {
   "compute1":"eth2" -- "leaf02":"swp3"
   "compute2":"eth1" -- "leaf01":"swp4"
   "compute2":"eth2" -- "leaf02":"swp4"
+  "bcm-01":"eth0" -- "outbound"
   "bcm-01":"eth1" -- "leaf01":"swp5"
   "bcm-01":"eth2" -- "leaf02":"swp5"
 }

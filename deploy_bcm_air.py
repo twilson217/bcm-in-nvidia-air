@@ -300,10 +300,12 @@ class AirBCMDeployer:
         
         try:
             # Use the v2 simulation import endpoint
+            # Disable auto OOB since we connect bcm-01:eth0 directly to outbound
             payload = {
                 'format': 'DOT',
                 'title': simulation_name,
                 'content': dot_content,
+                'oob': False,  # Disable automatic OOB management network
                 # Optional: add ZTP script if available
                 # 'ztp': ztp_script_content
             }
@@ -699,27 +701,27 @@ class AirBCMDeployer:
             sim = air.simulations.get(self.simulation_id)
             nodes = air.simulation_nodes.list(simulation=self.simulation_id)
             
-            # Apply cloud-init to user-defined Ubuntu/Debian nodes
-            # Skip Air-managed nodes (oob-mgmt-*) as they use Air's own images
+            # Apply cloud-init to Ubuntu/Debian nodes that support it
+            # Skip switches and PXE boot nodes
             configured_count = 0
-            skipped_air_managed = []
+            skipped_nodes = []
             
             for node in nodes:
                 node_name = node.name
                 
-                # Skip Air-managed OOB nodes (they don't honor user cloud-init)
-                if node_name.startswith('oob-mgmt'):
-                    skipped_air_managed.append(node_name)
-                    continue
-                
                 # Skip switches (they don't support cloud-init)
                 if any(skip in node_name.lower() for skip in ['leaf', 'spine', 'switch']):
+                    skipped_nodes.append((node_name, 'switch'))
                     continue
                 
                 # Skip nodes that are likely PXE boot (check OS if available)
                 try:
                     node_os = getattr(node, 'os', '') or ''
-                    if 'pxe' in node_os.lower() or 'cumulus' in node_os.lower():
+                    if 'pxe' in node_os.lower():
+                        skipped_nodes.append((node_name, 'PXE boot'))
+                        continue
+                    if 'cumulus' in node_os.lower():
+                        skipped_nodes.append((node_name, 'Cumulus'))
                         continue
                 except:
                     pass
@@ -734,10 +736,10 @@ class AirBCMDeployer:
                 except Exception as e:
                     print(f"    ⚠ Could not assign cloud-init to {node_name}: {e}")
             
-            if skipped_air_managed:
-                print(f"\n  ℹ Skipped Air-managed nodes (use default 'ubuntu'/'nvidia' credentials):")
-                for name in skipped_air_managed:
-                    print(f"    - {name}")
+            if skipped_nodes:
+                print(f"\n  ℹ Skipped nodes (don't support cloud-init):")
+                for name, reason in skipped_nodes:
+                    print(f"    - {name} ({reason})")
             
             # Clean up temp file
             temp_cloudinit.unlink(missing_ok=True)
