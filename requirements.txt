@@ -1,0 +1,19 @@
+# Python Requirements for BCM Air Deployment Automation
+# Install with: pip install -r requirements.txt
+
+# NVIDIA Air SDK for API interaction
+air-sdk>=2.0.0
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# HTTP requests (for fallback/testing)
+requests>=2.31.0
+
+# Path handling
+pathlib2>=2.3.7; python_version < '3.4'
+
+# Ansible for remote configuration
+ansible>=2.15.0
+ansible-core>=2.15.0
+

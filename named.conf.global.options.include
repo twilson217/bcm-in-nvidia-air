@@ -1,3 +1,0 @@
-dnssec-validation no;
-dnssec-enable no;
-dnssec-lookaside yes;

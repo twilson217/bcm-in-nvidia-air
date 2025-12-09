@@ -1,0 +1,14 @@
+---
+# Ansible Galaxy Collections Requirements
+# Install with: ansible-galaxy collection install -r ansible-requirements.yml
+
+collections:
+  # BCM 10.x installation collection
+  - name: brightcomputing.bcm100
+    source: https://galaxy.ansible.com
+  
+  # BCM 11.x installation collection
+  - name: brightcomputing.bcm110
+    version: ">=30.0.52573"
+    source: https://galaxy.ansible.com
+

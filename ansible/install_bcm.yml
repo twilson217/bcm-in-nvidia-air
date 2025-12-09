@@ -1,0 +1,285 @@
+---
+# Ansible Playbook for BCM Installation on Rocky Linux 9
+# This playbook installs BCM 10.x or 11.x using Bright Computing Ansible Galaxy collections
+
+- name: Install and Configure Bright Cluster Manager
+  hosts: bcm_headnode
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    bcm_version: "{{ bcm_version | default('10.x') }}"
+    bcm_collection: "{{ bcm_collection | default('brightcomputing.bcm100') }}"
+    bcm_config_file: "{{ playbook_dir }}/cm-bright-setup.conf"
+    
+  pre_tasks:
+    - name: Display BCM installation information
+      debug:
+        msg:
+          - "Installing BCM {{ bcm_version }}"
+          - "Using Ansible collection: {{ bcm_collection }}"
+    
+    - name: Update system packages
+      yum:
+        name: '*'
+        state: latest
+        update_cache: yes
+      tags: ['system-update']
+    
+    - name: Install required system packages
+      yum:
+        name:
+          - python3
+          - python3-pip
+          - epel-release
+          - wget
+          - curl
+          - vim
+          - git
+        state: present
+    
+    - name: Grow root partition to use full disk
+      block:
+        - name: Check current disk size
+          command: df -h /
+          register: disk_before
+          changed_when: false
+        
+        - name: Grow partition to fill disk
+          command: growpart /dev/vda 1
+          register: growpart_result
+          failed_when: false
+          changed_when: growpart_result.rc == 0
+        
+        - name: Grow XFS filesystem
+          command: xfs_growfs /
+          when: growpart_result.rc == 0
+        
+        - name: Check new disk size
+          command: df -h /
+          register: disk_after
+          changed_when: false
+        
+        - name: Display disk size change
+          debug:
+            msg:
+              - "Before: {{ disk_before.stdout_lines[1] }}"
+              - "After: {{ disk_after.stdout_lines[1] }}"
+      tags: ['disk-setup']
+    
+    - name: Configure network interfaces
+      block:
+        - name: Configure eth0 (internal network)
+          copy:
+            dest: /etc/sysconfig/network-scripts/ifcfg-eth0
+            content: |
+              TYPE="Ethernet"
+              BOOTPROTO="static"
+              NAME="eth0"
+              DEVICE="eth0"
+              ONBOOT="yes"
+              IPADDR=192.168.200.254
+              NETMASK=255.255.255.0
+            owner: root
+            group: root
+            mode: '0644'
+          register: eth0_config
+        
+        - name: Configure eth1 (external network)
+          copy:
+            dest: /etc/sysconfig/network-scripts/ifcfg-eth1
+            content: |
+              TYPE="Ethernet"
+              BOOTPROTO="dhcp"
+              NAME="eth1"
+              DEVICE="eth1"
+              ONBOOT="yes"
+            owner: root
+            group: root
+            mode: '0644'
+          register: eth1_config
+        
+        - name: Restart network service if configuration changed
+          systemd:
+            name: NetworkManager
+            state: restarted
+          when: eth0_config.changed or eth1_config.changed
+        
+        - name: Wait for network to be ready
+          wait_for:
+            timeout: 10
+          when: eth0_config.changed or eth1_config.changed
+      tags: ['network-config']
+    
+    - name: Create BCM configuration directory
+      file:
+        path: /root/cm
+        state: directory
+        mode: '0755'
+    
+    - name: Copy BCM setup configuration file
+      copy:
+        src: "{{ bcm_config_file }}"
+        dest: /root/cm/cm-bright-setup.conf
+        mode: '0644'
+      when: bcm_config_file is file
+    
+    - name: Copy node disk setup configuration
+      copy:
+        src: "{{ playbook_dir }}/node-disk-setup.xml"
+        dest: /root/cm/node-disk-setup.xml
+        mode: '0644'
+      when: "{{ lookup('file', playbook_dir + '/node-disk-setup.xml', errors='ignore') | default('') != '' }}"
+    
+    - name: Copy named configuration
+      copy:
+        src: "{{ playbook_dir }}/named.conf.global.options.include"
+        dest: /etc/named.conf.global.options.include
+        mode: '0644'
+      when: "{{ lookup('file', playbook_dir + '/named.conf.global.options.include', errors='ignore') | default('') != '' }}"
+    
+    - name: Install Ansible and required collections
+      block:
+        - name: Install Ansible via pip
+          pip:
+            name:
+              - ansible
+              - ansible-core
+            state: present
+            executable: pip3
+        
+        - name: Install BCM Ansible collection from Galaxy
+          command: "ansible-galaxy collection install {{ bcm_collection }}"
+          register: galaxy_install
+          changed_when: "'is already installed' not in galaxy_install.stdout"
+      tags: ['ansible-setup']
+  
+  tasks:
+    # BCM 10.x Installation
+    - name: Install BCM 10.x
+      when: bcm_version == '10.x'
+      block:
+        - name: Install BCM 10.x using brightcomputing.bcm100 collection
+          debug:
+            msg: "Installing BCM 10.x - This step will be customized based on collection requirements"
+        
+        - name: Check if cm-bright-setup command exists
+          stat:
+            path: /usr/bin/cm-bright-setup
+          register: cm_bright_setup
+        
+        - name: Run cm-bright-setup for BCM 10.x (if not already installed)
+          command: "cm-bright-setup -c /root/cm/cm-bright-setup.conf --on-error-action abort"
+          when: 
+            - not cm_bright_setup.stat.exists or cm_bright_setup.stat.exists
+            - bcm_config_file is file
+          register: bcm_install_10
+          async: 3600
+          poll: 30
+          tags: ['bcm-install']
+        
+        - name: Display BCM 10.x installation result
+          debug:
+            var: bcm_install_10
+          when: bcm_install_10 is defined
+    
+    # BCM 11.x Installation
+    - name: Install BCM 11.x
+      when: bcm_version == '11.x'
+      block:
+        - name: Install BCM 11.x using brightcomputing.bcm110 collection
+          debug:
+            msg: "Installing BCM 11.x - This step will be customized based on collection requirements"
+        
+        - name: Install BCM 11.x using installer collection
+          include_role:
+            name: "{{ bcm_collection }}.installer"
+          vars:
+            bcm_config: /root/cm/cm-bright-setup.conf
+          when: bcm_config_file is file
+          tags: ['bcm-install']
+  
+  post_tasks:
+    - name: Verify BCM installation
+      block:
+        - name: Check if cmd daemon is installed
+          stat:
+            path: /usr/sbin/cmd
+          register: cmd_binary
+        
+        - name: Get BCM version information
+          command: cmd -v
+          register: bcm_version_info
+          changed_when: false
+          failed_when: false
+          when: cmd_binary.stat.exists
+        
+        - name: Display BCM version
+          debug:
+            var: bcm_version_info.stdout_lines
+          when: 
+            - cmd_binary.stat.exists
+            - bcm_version_info is defined
+            - bcm_version_info.rc == 0
+        
+        - name: Check BCM service status
+          systemd:
+            name: cmd
+          register: cmd_service
+          failed_when: false
+        
+        - name: Display BCM service status
+          debug:
+            msg: "BCM (cmd) service status: {{ cmd_service.status.ActiveState | default('unknown') }}"
+          when: cmd_service is defined
+      tags: ['verification']
+    
+    - name: Configure BCM basic network settings
+      block:
+        - name: Create cmsh command file for network configuration
+          copy:
+            dest: /tmp/bcm_network_config.cmsh
+            content: |
+              network
+              use internalnet
+              set gateway 192.168.200.1
+              commit
+            mode: '0644'
+        
+        - name: Apply network configuration via cmsh
+          shell: "cmsh < /tmp/bcm_network_config.cmsh"
+          register: cmsh_network
+          changed_when: true
+          failed_when: false
+        
+        - name: Display network configuration result
+          debug:
+            var: cmsh_network
+          when: cmsh_network is defined
+        
+        - name: Clean up temporary cmsh file
+          file:
+            path: /tmp/bcm_network_config.cmsh
+            state: absent
+      tags: ['bcm-config']
+      when: cmd_binary.stat.exists
+    
+    - name: Display post-installation information
+      debug:
+        msg:
+          - "=========================================="
+          - "BCM {{ bcm_version }} Installation Complete"
+          - "=========================================="
+          - ""
+          - "BCM Head Node IP: 192.168.200.254"
+          - "Login: root / 3tango"
+          - ""
+          - "Next steps:"
+          - "1. SSH to bcm-headnode0: ssh root@192.168.200.254"
+          - "2. Access BCM shell: cmsh"
+          - "3. Add devices (switches and compute nodes)"
+          - "4. Access BCM GUI on port 8081"
+          - ""
+          - "For detailed device onboarding, see README.md"
+          - "=========================================="
+

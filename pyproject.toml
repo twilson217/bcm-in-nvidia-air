@@ -1,0 +1,46 @@
+[project]
+name = "bcm-air-deployment"
+version = "1.0.0"
+description = "Automated BCM deployment on NVIDIA Air using stock Rocky Linux images"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "requests>=2.31.0",
+    "ansible>=2.15.0",
+    "ansible-core>=2.15.0",
+    "air-sdk>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+deploy-bcm-air = "deploy_bcm_air:main"
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "ruff",
+]
+
+[dependency-groups]
+dev = [
+    "black",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+only-include = [
+    "deploy_bcm_air.py",
+    "ansible/install_bcm.yml",
+    "ansible/cumulus-ztp.sh",
+    "cm-bright-setup.conf",
+    "node-disk-setup.xml",
+    "named.conf.global.options.include",
+    "topologies/test-bcm.dot",
+    "ansible-requirements.yml",
+]
+

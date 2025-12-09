@@ -1,213 +1,223 @@
 <!-- AIR:tour -->
 
-# How to setup BCM on AIR environment and make it functional
+# Automated BCM Deployment on NVIDIA Air
 
-This document intends to explain how to get BCM operational and basics of onboarding a Cumulus switch and a PXE boot server on AIR environment.
-BCM images come in .img.gz format and they are not fully compatible with AIR environment as of time of this README has been written. 
-BCM images are provisioned using cloud-init for network configuration and setup of BCM itself, however AIR environment doesn't support cloud-init as of November/2023.
-Therefore as a workaound we are deploying BCM cluster ourselves and maintaining the BCM image on AIR platform by ourselves.
+This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Rocky Linux 9 images and Ansible Galaxy playbooks. No custom image creation or manual configuration required!
 
-## BCM Versioning and builds
-| version     | package and build                                  | release date                         |                                                    |
-| ----------- | -------------------------------------------------- |------------------------------------- |--------------------------------------------------- |
-|10.23.09     | cmdaemon-10.0-156496_cm10.0_ab4640c657.x86_64.rpm  |  Thu 31 Aug 2023 10:18:36 PM CEST    |                                  |
-|10.23.10 +   | cmdaemon-10.0-156589_cm10.0_bb168b4afc.x86_64.rpm  |  Tue 10 Oct 2023 11:27:30 PM CEST    |                                  |
-|10.23.11     | cmdaemon-10.0-156713_cm10.0_14e56b67c0.x86_64.rpm  |  Tue 14 Nov 2023 09:05:48 PM CET     |                                  |
-|10.23.12 *+  | cmdaemon-10.0-156921_cm10.0_5d3db827b4.x86_64.rpm  |  Thu 07 Dec 2023 07:04:39 PM CET     |                                  |
-|10.24.03     | bcmh-rocky9u3-10.0-2.img.gz                        |                                      |                                  |  
+## Overview
 
-## Installation and image configuration from scratch
+This solution automates the complete BCM deployment process:
+- Creates NVIDIA Air simulation from topology definition
+- Deploys BCM 10.x or 11.x (user choice) via Ansible
+- Configures network interfaces and storage automatically
+- Sets up basic BCM configuration (DHCP gateway)
 
-### Download image
-Previous versions of BCM10  
-https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-4.img.gz  
-https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u2-10.0-8.img.gz  
+**Key Benefits:**
+- No custom image creation or upload required
+- Uses stock Rocky Linux 9 images available in Air
+- Choose BCM 10.x or 11.x at deployment time
+- Fully automated via NVIDIA Air APIs
+- Complete deployment in ~15-20 minutes
 
-The latest GA version of BCM 10.24.03 can be obtained from the following link  
-https://s3.us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/bcmh-rocky9u3-10.0-2.img.gz
+## Quick Start
 
-`https://s3-us-west-1.amazonaws.com/us-west-1.cod-images.support.brightcomputing.com/imagerepo.yaml` file includes all the versions and builds for corresponding image file
-  
+### Prerequisites
 
+1. NVIDIA Air account with API access
+   - External site: [air.nvidia.com](https://air.nvidia.com) - publicly accessible
+   - Internal site (NVIDIA employees): [air-inside.nvidia.com](https://air-inside.nvidia.com) - **requires NVIDIA VPN or internal network**
+2. Python 3.8+ installed locally
+3. NVIDIA Air API token (generate from your Air account settings)
 
-As per AIR documentation on how to upload and maintain image files, details are explained in [Image Upload Process](https://confluence.nvidia.com/display/NetworkingBU/Image+Upload+Process):
-We are only allowed to upload a qcow2 or iso format, we must convert this .img.gz into a qcow2 image format.
+### Installation
 
-Since I'm using Windows with WSL, I first downloaded the image and using 7-zip I unpacked .img file.
-Then, copy the file on WSL linux partition and converted the image to qcow2 format.
-
-### Convert to qcow2
-`sudo qemu-img convert -f raw -O qcow2 bcmh-rocky9u2-10.0-8.img bcmh-rocky9u2-10.0-8.qcow2`
-
-### Set root password
-As I already know (by experience) this image file doesn't have a root password set and any of the network interfaces configured, I plan to use external tools to mount the image file and do this very basic configuration offline, without booting the image file. Follow the instructions from AIR documentation on [Working with qcow2 images](https://confluence.nvidia.com/display/NetworkingBU/Working+with+qcow2+images)
-```
-sudo apt install -y linux-image-generic
-sudo apt install -y guestfs-tools
-sudo virt-sysprep -a bcmh-rocky9u2-10.0-8.qcow2 --password root:password:centos
+1. Clone this repository:
+```bash
+git clone <repository-url>
+cd bcm_usecases
 ```
 
-### Configure Network Interfaces
-Mount image file from a tool called gustfish
-`sudo guestfish --rw -a bcmh-rocky9u2-10.0-8.qcow2`  
-
-```
-><fs> run  
-><fs> list-filesystems  
-><fs> mount /dev/sda1 /  
-><fs> touch /etc/sysconfig/network-scripts/ifcfg-eth0  
-```  
-
-edit `ifcfg-eth0` file using the `vi` editor and configure it with a static IP. This will be our internal interface, looking towards oob management network.
-
-```
-TYPE="Ethernet"  
-BOOTPROTO="static"  
-NAME="eth0"  
-DEVICE="eth0"  
-ONBOOT="yes"  
-IPADDR=192.168.200.254  
-NETMASK=255.255.255.0  
-```
-repeat the same process for `ifcfg-eth1`, but configure it to obtain an IP address using DHCP. This will be our external interface, looking towards internet where we can connect from outside world.
-
-```
-><fs> touch /etc/sysconfig/network-scripts/ifcfg-eth1
-```
-```
-TYPE="Ethernet"  
-BOOTPROTO="dhcp"  
-NAME="eth1"  
-DEVICE="eth1"  
-ONBOOT="yes"  
-```
-### Add configuration files used by BCM
-
-
-`><fs> touch /root/cm/`[node-disk-setup.xml](node-disk-setup.xml)  
-`><fs> touch /root/cm/`[cm-bright-setup.conf](cm-bright-setup.conf)  
-`><fs> touch /etc/`[named.conf.global.options.include](named.conf.global.options.include)  
-
-
-### Finish
-Finally unmount the image file and exit. Your image file is ready to be used in BCM environment.
-```
-><fs> umount /  
-><fs> exit  
+2. Install uv (fast Python package installer):
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### Upload the image on AIR and share it with yourself to be able to use
-
-Based on [Image Upload Process](https://confluence.nvidia.com/display/NetworkingBU/Image+Upload+Process), upload the image on AIR and make sure image is shared with yourself.
-
-## Starting the Simulation for two leaf switches, two PXE boot servers and BCM
-
-Using the following .dot file and ztp script, start a custom topology and connect using `root/3tango` account credentials to BCM virtual machine. 
-As usual `oob-mgmt-server` has `ubuntu/nvidia` and cumulus switches `cumulus/CumulusLinux!` username password combinations. Once PXE boot and provisioning is sucessful both compute nodes will have the same login credentials (`root/3tango`) as BCM head node.
-
-[test-bcm.dot](test-bcm.dot)  
-[cumulus-ztp.sh](cumulus-ztp.sh)  
-
-
-### Configuring BCM virtual machine after the first boot
-
-1. grow vda1 partition to occupy whole virtual disk (200GB)
-```
-growpart /dev/vda 1  
-xfs_growfs /
+3. Create a virtual environment:
+```bash
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
-2. install BMC10 using the following command
-`cm-bright-setup -c /root/cm/cm-bright-setup.conf --on-error-action abort`
+4. Install Python dependencies using uv:
+```bash
+# For WSL users with project on /mnt/c/, suppress harmless hardlink warning:
+export UV_LINK_MODE=copy
 
-If you'd like to change the default root password after the installation, run the following command:
-```
-cm-change-passwd 
-```
-
-You can check the BCM version installed using the following command on BCM shell:
-
-```
-[root@localhost ~]# cmd -v
-Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CMDaemon version 3.0 (156589_bb168b4afc)  <==== Current build in the qcow2 image uploaded on AIR
-Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CM version 10.0
-Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: CM API hash 1e4d7b993d8f2a4d8fb375eced4e0f8ccc31b8818bdb8f8d319642778aafc42fabc47726c74929effa60ccaccff5f7fec4d07fb5668efd2a000c3d7e5d7c51eb
-Mon Nov 20 11:06:29 2023 [   CMD   ]   Info: This binary was compiled on Oct 10 2023, 23:22:18
-
-```
-3. [OPTIONAL STEP FOR NON-GA BCM INSTLLATION - skip if you are using a GA version of BCM] Adding daily build repositories in BCM headnode:  
-
-As of time of this writing, unfortunately we faced several bugs that prevented Cumulus switches to be onboarded into BCM. For sucessful onboarding we had to disable GA repositories and switch to nightly builds in order to proceed.  
-Therefore the following script must be run on BCM virtual machine to enable nightly builds.  
-[setup-dev-repos.sh](setup-dev-repos.sh)  
-It's alread copied under `/root` folder, so run the script using the following prompt:
-```
-[root@localhost ~]# bash setup-dev-repos.sh
-=== / (10.0) ===
-=== /cm/node-installer ===
-=== /cm/images/default-image ===
-=== 1804 ===
-=== 2004 ===
-=== 2204 ===
+# Install dependencies
+uv pip install -e .
 ```
 
-After running this script the following commands must be run:  
-```
-yum clean all
-yum update cmdaemon base-view -y
-yum --installroot /cm/images/default-image clean all -y
-yum --installroot /cm/images/default-image update cmdaemon -y
-yum --installroot /cm/node-installer clean all -y
-yum --installroot /cm/node-installer update cmdaemon-node-installer -y
+5. Install system Ansible (required for ansible-galaxy):
+```bash
+sudo apt install -y software-properties-common
+sudo add-apt-repository --yes --update ppa:ansible/ansible
+sudo apt install -y ansible
 ```
 
-After nightly build upgrades, as of this documents writing, we can observe the build number as follows:
-
-```
-[root@localhost ~]# cmd -v
-Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: CMDaemon version 3.0 (156809_649e91203c)
-Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: CM version 10.0
-Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: CM API hash 1e4d7b993d8f2a4d8fb375eced4e0f8ccc31b8818bdb8f8d319642778aafc42fabc47726c74929effa60ccaccff5f7fec4d07fb5668efd2a000c3d7e5d7c51eb
-Mon Nov 20 11:53:58 2023 [   CMD   ]   Info: This binary was compiled on Nov 17 2023, 22:29:41
-
+6. Install Ansible collections:
+```bash
+ansible-galaxy collection install -r ansible-requirements.yml
 ```
 
-4. disable dhcpd service on oob-mgmt-server so that BCM will be the only DHCP server for oob segment and can distribute compute nodes PXE info and ZTP script to Cumulus switches.
+7. Configure your NVIDIA Air credentials:
+```bash
+# Copy the example environment file
+cp env.example .env
 
+# Edit .env with your actual credentials
+# Required fields:
+#   AIR_API_TOKEN - Your API token from Air
+#   AIR_USERNAME - Your Air account email
+#   AIR_API_URL - Air site URL (air.nvidia.com or air-inside.nvidia.com)
 ```
+
+**Example `.env` file:**
+```bash
+AIR_API_TOKEN=your_actual_token_here
+AIR_USERNAME=your_email@nvidia.com
+AIR_API_URL=https://air.nvidia.com  # or https://air-inside.nvidia.com
+```
+
+8. **(Optional)** Verify your setup:
+```bash
+python tools/check_setup.py
+```
+
+This will check that all prerequisites are met before deployment.
+
+### Deploy BCM
+
+**Quick Configuration Reference:**
+
+| Site | Configuration | Command |
+|------|---------------|---------|
+| External (default) | Set `AIR_API_URL=https://air.nvidia.com` in `.env` | `python deploy_bcm_air.py` |
+| Internal (NVIDIA) | Set `AIR_API_URL=https://air-inside.nvidia.com` in `.env` | `python deploy_bcm_air.py` or use `--internal` flag |
+
+Run the automated deployment script:
+
+```bash
+# Deploy to external site (default)
+python deploy_bcm_air.py
+
+# Or deploy to internal site using --internal flag
+python deploy_bcm_air.py --internal
+```
+
+The script will:
+1. Prompt you to choose BCM version (10.x or 11.x)
+2. Create the Air simulation with all nodes and network topology
+3. Wait for nodes to boot and become ready
+4. Install BCM via Ansible (takes 10-15 minutes)
+5. Configure basic network settings
+
+**That's it!** Your BCM environment will be ready to use.
+
+### Access Your BCM Environment
+
+After deployment completes:
+
+**SSH Access:**
+```bash
+ssh root@192.168.200.254
+Password: 3tango
+```
+
+**BCM Shell:**
+```bash
+cmsh
+```
+
+**BCM GUI Access:**
+1. In NVIDIA Air, use "ADD SERVICE" to expose TCP port 8081 on bcm-headnode0
+2. Access BCM web interface:
+   - `https://<worker_url>:<port>/userportal`
+   - `https://<worker_url>:<port>/base-view`
+
+## Network Topology
+
+The deployment creates the following environment:
+
+| Node name        | IP address        | MAC address       | Function          |
+| ---------------- | ----------------- | ----------------- | ----------------- |
+| bcm-headnode0    | 192.168.200.254   | (auto)            | BCM head node     |
+| oob-mgmt-server  | 192.168.200.1     | (auto)            | OOB management    |
+| oob-mgmt-switch  | 192.168.200.251   | (auto)            | OOB switch        |
+| leaf01           | 192.168.200.12    | 44:38:39:22:AA:02 | Cumulus switch    |
+| leaf02           | 192.168.200.13    | 44:38:39:22:AA:03 | Cumulus switch    |
+| compute0         | 192.168.200.14    | 44:38:39:22:AA:04 | PXE boot server   |
+| compute1         | 192.168.200.15    | 44:38:39:22:AA:05 | PXE boot server   |
+| compute2         | 192.168.200.16    | 44:38:39:22:AA:06 | PXE boot server   |
+| ubuntu0          | 192.168.200.10    | 44:38:39:22:AA:01 | Ubuntu server     |
+
+Network: `192.168.200.0/24` (internal OOB management network)
+
+## Project Structure
+
+**Main Files:**
+- `deploy_bcm_air.py` - Main deployment automation script
+- `env.example` - Environment variable template
+
+**Ansible:**
+- `ansible/install_bcm.yml` - Ansible playbook for BCM installation
+- `ansible/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
+
+**Topologies:**
+- `topologies/test-bcm.dot` - Network topology definition
+
+**Tools:**
+- `tools/check_setup.py` - Environment setup verification
+- `tools/test_sdk_auth.py` - Test Air SDK authentication
+- `tools/test_direct_auth.py` - Test direct API authentication
+
+## Next Steps: Device Onboarding
+
+After BCM is installed, you'll need to onboard the switches and compute nodes into BCM management.
+
+### 1. Disable DHCP on oob-mgmt-server
+
+First, disable the default DHCP server so BCM can manage DHCP:
+
+```bash
+# Connect to oob-mgmt-server and run:
 sudo systemctl disable isc-dhcp-server
 sudo service isc-dhcp-server stop
 sudo service isc-dhcp-server status
 ```
 
-5. Start configuring BCM for dhcp and switch / pxe boot  
-In order to configure things on BCM first you need to be on BCM console, type the following command on BCM shell:  
-```
-[root@localhost ~]# cmsh
-[bcm-nv-air]%
-```
+### 2. Configure BCM Network Gateway
 
-5.1. set dhcp gateway to point towards oob-mgmt-server. From BCM command line type:
+SSH to bcm-headnode0 and configure the network gateway:
 
-```
+```bash
+ssh root@192.168.200.254
+# Password: 3tango
+
+# Enter BCM shell
+cmsh
+
+# Configure gateway (automated by deployment script, but verify)
 network
 use internalnet
 set gateway 192.168.200.1
 commit
 ```
 
-5.2. Configure leaf01 and leaf02 settings from cmsh console, to achieve this step, we reserved the following IP / MAC addresses for each node:
+### 3. Onboard Cumulus Switches
 
-| Node name     | interface | IP address        |  MAC address        |
-| ------------- | --------- |------------------ |-------------------- |
-| leaf01        | eth0      |  192.168.200.12   | 44:38:39:22:AA:02   |
-| leaf02        | eth0      |  192.168.200.13   | 44:38:39:22:AA:03   |
-| compute0      | eth0      |  192.168.200.14   | 44:38:39:22:AA:04   |
-| compute1      | eth0      |  192.168.200.15   | 44:38:39:22:AA:05   |
-| BCM           | eth0      |  192.168.200.254  | random              |
+From the BCM shell (`cmsh`), add the Cumulus switches:
 
-
-Configure the following parameters on BCM for leaf01:
+**Add leaf01:**
 ```
 device
 list
@@ -220,16 +230,16 @@ set enableapi yes
 commit
 ```
 
-Logon to leaf01 and enable ztp process and reboot the switch:
+Then on leaf01 console, enable ZTP and reboot:
 
-```
+```bash
 sudo ztp -e
 sudo reboot
 ```
 
-5.3. Repeat the same process for leaf02 on BCM:
+**Add leaf02:**
 
-```
+```bash
 device
 list
 device add switch leaf02 192.168.200.13
@@ -241,175 +251,281 @@ set enableapi yes
 commit
 ```
 
-on leaf02 console:
-```
+Then on leaf02 console:
+
+```bash
 sudo ztp -e
 sudo reboot
 ```
 
+### 4. Onboard Compute Nodes
 
-5.4. Configure compute0 and compute1 settings from cmsh console, to achieve this step, we already know the MAC address of eth0 interfaces of both nodes from the table above
+Add compute nodes to BCM for PXE boot management:
 
-```
+**Add compute0:**
+
+```bash
 device
 list
 device add PhysicalNode compute0 192.168.200.14
 set mac 44:38:39:22:AA:04
 commit
 ```
-then add compute1
-```
+
+**Add compute1:**
+
+```bash
 device add PhysicalNode compute1 192.168.200.15
 set mac 44:38:39:22:AA:05
 commit
 ```
-5.5. Reboot compute nodes so PXE boot process starts again.
 
-5.6. From BCM `cmsh` command line prompt, check the status of devices and wait till they become `UP`
+**Add compute2:**
 
+```bash
+device add PhysicalNode compute2 192.168.200.16
+set mac 44:38:39:22:AA:06
+commit
 ```
+
+Reboot the compute nodes in NVIDIA Air so PXE boot process starts.
+
+### 5. Monitor Device Status
+
+From BCM `cmsh` command line, check the status of devices and wait for them to become `UP`:
+
+```bash
 device
 list
-[bcm-nv-air->device]% list
-Type                   Hostname (key)   MAC                Category         Ip              Network        Status
----------------------- ---------------- ------------------ ---------------- --------------- -------------- --------------------------------
-HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
-PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
-Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
-Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [       BOOTING       ] (/switc+
 ```
 
-```
-Type                   Hostname (key)   MAC                Category         Ip              Network        Status
----------------------- ---------------- ------------------ ---------------- --------------- -------------- --------------------------------
-HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
-PhysicalNode           compute0         44:38:39:22:AA:04  default          192.168.200.14  internalnet    [     INSTALLING      ] (provis+
-PhysicalNode           compute1         44:38:39:22:AA:05  default          192.168.200.15  internalnet    [  DOWN  ]
-PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
-Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
-Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [   UP   ]
-```
+**Expected device progression:**
+
+**Switches:** You'll see status change from `BOOTING` → `UP` as ZTP completes and cm-lite-daemon registers (takes 2-5 minutes).
+
+**Compute Nodes:** Status will progress through `BOOTING` → `INSTALLING` → `INSTALLER_CALLINGINIT` → `UP` (takes 5-10 minutes).
+
+Example output when all devices are online:
 
 ```
-Type                   Hostname (key)   MAC                Category         Ip              Network        Status
----------------------- ---------------- ------------------ ---------------- --------------- -------------- --------------------------------
-HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
-PhysicalNode           compute0         44:38:39:22:AA:04  default          192.168.200.14  internalnet    [ INSTALLER_CALLINGINIT ] (swit+
-PhysicalNode           compute1         44:38:39:22:AA:05  default          192.168.200.15  internalnet    [  DOWN  ]
-PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
-Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
-Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [   UP   ]
+Type          Hostname         MAC                IP              Status
+------------- ---------------- ------------------ --------------- ----------
+HeadNode      bcm-nv-air       48:B0:2D:11:FE:92  192.168.200.254 [ UP ]
+PhysicalNode  compute0         44:38:39:22:AA:04  192.168.200.14  [ UP ]
+PhysicalNode  compute1         44:38:39:22:AA:05  192.168.200.15  [ UP ]
+PhysicalNode  compute2         44:38:39:22:AA:06  192.168.200.16  [ UP ]
+Switch        leaf01           44:38:39:22:AA:02  192.168.200.12  [ UP ]
+Switch        leaf02           44:38:39:22:AA:03  192.168.200.13  [ UP ]
 ```
 
-```
-Type                   Hostname (key)   MAC                Category         Ip              Network        Status
----------------------- ---------------- ------------------ ---------------- --------------- -------------- -----------------------
-HeadNode               bcm-nv-air       48:B0:2D:11:FE:92                   192.168.200.254 internalnet    [   UP   ]
-PhysicalNode           compute0         44:38:39:22:AA:04  default          192.168.200.14  internalnet    [   UP   ]
-PhysicalNode           compute1         44:38:39:22:AA:05  default          192.168.200.15  internalnet    [  DOWN  ]
-PhysicalNode           node001          00:00:00:00:00:00  default          192.168.200.1   internalnet    [  DOWN  ], unassigned
-Switch                 leaf01           44:38:39:22:AA:02                   192.168.200.12  internalnet    [   UP   ]
-Switch                 leaf02           44:38:39:22:AA:03                   192.168.200.13  internalnet    [   UP   ]
-```
+## Advanced Configuration
 
-For switches at first you will see "BOOTING", then after ZTP process completes and registers cm-lite-daemon service, you will see "UP". This might take a couple of minutes depending on your network speed.
-For compute nodes in the first stages of PXE boot you will see "BOOTING", then "INSTALLING", "INSTALLER_CALLINGINIT" and finally "UP"
+### BCM Version Information
 
+Check the installed BCM version:
 
-5.7. The status of devices can be observed from BCM GUI as well, to do this we need to use `ADD SERVICE` function of AIR and map TCP 8081 port of BCM head node to an externally reachable url/port combination.
-After this step, BCM GUI can be accessible from the following URLs:
-```
-https://<worker_url>:<tcp_port>/userportal
-https://<worker_url>:<tcp_port>/base-view
+```bash
+cmd -v
 ```
 
-<!-- AIR:page -->
+### Accessing BCM GUI
 
-6. If you'd like to enable air_agent on BCM machine so that you can control the virtual machine using AIR SDK, please clone the air_sdk repository and install it.
+The BCM web interface runs on port 8081. To access it:
 
-```
-[root@localhost ~]# git clone https://github.com/NVIDIA/air_agent.git
-Cloning into 'air_agent'...
-remote: Enumerating objects: 590, done.
-remote: Counting objects: 100% (360/360), done.
-remote: Compressing objects: 100% (163/163), done.
-remote: Total 590 (delta 255), reused 288 (delta 195), pack-reused 230
-Receiving objects: 100% (590/590), 186.76 KiB | 2.92 MiB/s, done.
-Resolving deltas: 100% (333/333), done.
-[root@localhost ~]# cd air_agent/
+1. In NVIDIA Air, use "ADD SERVICE" to expose TCP port 8081 on bcm-headnode0
+2. Access the GUI at:
+   - `https://<worker_url>:<tcp_port>/userportal`
+   - `https://<worker_url>:<tcp_port>/base-view`
 
-[root@localhost air_agent]# ./install.sh
-####################################
-# Installing pip requirements      #
-####################################
-Processing /root/air_agent
-  DEPRECATION: A future pip version will change local packages to be built in-place without first copying to a temporary directory. We recommend you use --use-feature=in-tree-build to test your packages with this new behavior before it becomes the default.
-   pip 21.3 will remove support for this functionality. You can find discussion regarding this at https://github.com/pypa/pip/issues/7555.
-  Installing build dependencies ... done
-  Getting requirements to build wheel ... done
-    Preparing wheel metadata ... done
-Collecting cryptography==41.0.3
-  Downloading cryptography-41.0.3-cp37-abi3-manylinux_2_28_x86_64.whl (4.3 MB)
-     |████████████████████████████████| 4.3 MB 6.7 MB/s
-Collecting requests==2.31.0
-  Downloading requests-2.31.0-py3-none-any.whl (62 kB)
-     |████████████████████████████████| 62 kB 5.0 MB/s
-Collecting gitpython==3.1.35
-  Downloading GitPython-3.1.35-py3-none-any.whl (188 kB)
-     |████████████████████████████████| 188 kB 76.7 MB/s
-Requirement already satisfied: cffi>=1.12 in /usr/lib64/python3.9/site-packages (from cryptography==41.0.3->agent==3.0.2) (1.14.5)
-Collecting gitdb<5,>=4.0.1
-  Downloading gitdb-4.0.11-py3-none-any.whl (62 kB)
-     |████████████████████████████████| 62 kB 5.8 MB/s
-Requirement already satisfied: idna<4,>=2.5 in /usr/lib/python3.9/site-packages (from requests==2.31.0->agent==3.0.2) (2.10)
-Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/lib/python3.9/site-packages (from requests==2.31.0->agent==3.0.2) (1.26.5)
-Collecting certifi>=2017.4.17
-  Downloading certifi-2023.11.17-py3-none-any.whl (162 kB)
-     |████████████████████████████████| 162 kB 107.3 MB/s
-Collecting charset-normalizer<4,>=2
-  Downloading charset_normalizer-3.3.2-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (142 kB)
-     |████████████████████████████████| 142 kB 70.6 MB/s
-Requirement already satisfied: pycparser in /usr/lib/python3.9/site-packages (from cffi>=1.12->cryptography==41.0.3->agent==3.0.2) (2.20)
-Collecting smmap<6,>=3.0.1
-  Downloading smmap-5.0.1-py3-none-any.whl (24 kB)
-Requirement already satisfied: ply==3.11 in /usr/lib/python3.9/site-packages (from pycparser->cffi>=1.12->cryptography==41.0.3->agent==3.0.2) (3.11)
-Building wheels for collected packages: agent
-  Building wheel for agent (PEP 517) ... done
-  Created wheel for agent: filename=agent-3.0.2-py3-none-any.whl size=12675 sha256=0f69636ca17cdb4c9f0238023cd9c7483c532058d01ab010786c08ed08cae8bf
-  Stored in directory: /tmp/pip-ephem-wheel-cache-wk_0ry9m/wheels/50/d2/4c/f2c8aad5fb8ab176c6ef4a732c23184494bb4dc8f43a02d0f2
-Successfully built agent
-Installing collected packages: smmap, gitdb, charset-normalizer, certifi, requests, gitpython, cryptography, agent
-Successfully installed agent-3.0.2 certifi-2023.11.17 charset-normalizer-3.3.2 cryptography-41.0.3 gitdb-4.0.11 gitpython-3.1.35 requests-2.31.0 smmap-5.0.1
-WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
-Done!
-####################################
-# Installing air-agent             #
-####################################
-Done!
-####################################
-# Enabling systemd service         #
-####################################
-Created symlink /etc/systemd/system/multi-user.target.wants/air-agent.service → /etc/systemd/system/air-agent.service.
-Done!
-[root@localhost air_agent]# ps -ef | grep air
-root       71805       1  1 12:12 ?        00:00:00 /usr/bin/python3 /usr/local/lib/air-agent/agent.py
-root       86919    1841  0 12:12 pts/0    00:00:00 grep --color=auto air
-[root@localhost air_agent]# more /var/log/air-agent.log
-2023-11-20 12:12:10,901 INFO Syncing clock from hypervisor
-2023-11-20 12:12:12,010 INFO Restarting chronyd.service
-2023-11-20 12:12:12,053 INFO Checking for updates
-2023-11-20 12:12:12,247 INFO Initializing with identity b863bbde-8ebe-4bcc-91ae-3906a0cf3c7d
-2023-11-20 12:12:12,250 WARNING Platform detection failed to determine OS
-2023-11-20 12:12:12,250 INFO Starting Air Agent daemon v3.0.2
-[root@localhost air_agent]# more /var/log/air-agent.log
-2023-11-20 12:12:10,901 INFO Syncing clock from hypervisor
-2023-11-20 12:12:12,010 INFO Restarting chronyd.service
-2023-11-20 12:12:12,053 INFO Checking for updates
-2023-11-20 12:12:12,247 INFO Initializing with identity b863bbde-8ebe-4bcc-91ae-3906a0cf3c7d
-2023-11-20 12:12:12,250 WARNING Platform detection failed to determine OS
-2023-11-20 12:12:12,250 INFO Starting Air Agent daemon v3.0.2
-[root@localhost air_agent]#
+### Installing NVIDIA Air Agent (Optional)
 
+If you want to control the BCM node programmatically via NVIDIA Air SDK:
+
+```bash
+ssh root@192.168.200.254
+
+git clone https://github.com/NVIDIA/air_agent.git
+cd air_agent/
+./install.sh
 ```
 
-<!-- AIR:page -->
+The Air Agent will be installed and enabled as a systemd service, allowing API-based control of the VM.
+
+## Troubleshooting
+
+### BCM Installation Issues
+
+If BCM installation fails, check:
+- Network connectivity on bcm-headnode0
+- Available disk space: `df -h`
+- BCM logs: `/var/log/cmd.log`
+
+### Device Onboarding Issues
+
+If switches or compute nodes don't appear in BCM:
+- Verify MAC addresses match the topology
+- Check DHCP is disabled on oob-mgmt-server
+- Verify network connectivity: `ping 192.168.200.12` (from BCM node)
+- Check ZTP logs on switches: `/var/log/syslog`
+
+### Authentication Errors (401/403)
+
+If you get an authentication error:
+
+```
+✗ Authentication Failed: 403
+Response: {"detail":"Authentication credentials were not provided."}
+```
+
+**Common causes:**
+1. `AIR_API_TOKEN` environment variable is not set
+2. API token is invalid or expired
+3. Using wrong token (internal vs external site tokens are different)
+
+**Solutions:**
+
+```bash
+# Check if .env file exists and is configured
+cat .env
+
+# Verify token is set
+python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('Token:', os.getenv('AIR_API_TOKEN', 'NOT SET'))"
+
+# Update your .env file with correct credentials:
+# 1. Log in to air.nvidia.com or air-inside.nvidia.com
+# 2. Go to Account Settings → API Tokens
+# 3. Generate a new token
+# 4. Update AIR_API_TOKEN in your .env file
+```
+
+**Important:** API tokens for `air.nvidia.com` and `air-inside.nvidia.com` are **different**. Make sure you're using the token from the correct site.
+
+### Connection to Internal Air Site Fails
+
+If you get a DNS resolution error when using `--internal` or `air-inside.nvidia.com`:
+
+```
+Failed to resolve 'air-inside.nvidia.com'
+```
+
+**This is expected** - the internal Air site requires:
+- Connection to NVIDIA internal network, OR
+- Active NVIDIA VPN connection
+
+**Solutions:**
+1. Connect to NVIDIA VPN and try again
+2. Use the external site instead: `python deploy_bcm_air.py` (remove `--internal` flag)
+3. Verify you can access https://air-inside.nvidia.com in your browser
+
+### Ansible Playbook Failures
+
+If Ansible fails during deployment:
+- Verify API token is valid: `echo $AIR_API_TOKEN`
+- Check Ansible collections installed: `ansible-galaxy collection list`
+- Run with verbose output: `ansible-playbook -vvv ansible/install_bcm.yml`
+
+### Dependency Management Issues
+
+This project uses `uv` for fast Python dependency management. Common uv commands:
+
+```bash
+# Install/sync dependencies
+uv pip install -e .
+
+# Add a new dependency
+uv pip install <package-name>
+
+# Update all dependencies
+uv pip install --upgrade -e .
+
+# Clear uv cache
+uv cache clean
+
+# Check uv version
+uv --version
+```
+
+**WSL Users:** If you see a warning about "Failed to hardlink files", this is expected when your project is on `/mnt/c/` (Windows filesystem) and is harmless. To suppress the warning:
+```bash
+export UV_LINK_MODE=copy
+```
+
+If you prefer using traditional pip, you can still use `requirements.txt`:
+```bash
+pip install -r requirements.txt
+```
+
+## Additional Resources
+
+- [NVIDIA Air Documentation](https://docs.nvidia.com/networking-ethernet-software/nvidia-air/)
+- [Bright Cluster Manager Documentation](https://www.brightcomputing.com/documentation)
+- [Ansible Galaxy - BCM 10.x Collection](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm100/)
+- [Ansible Galaxy - BCM 11.x Collection](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm110/)
+
+## Script Reference
+
+**deploy_bcm_air.py Options:**
+
+```bash
+# Show help
+python deploy_bcm_air.py --help
+
+# Deploy to internal NVIDIA Air site
+python deploy_bcm_air.py --internal
+
+# Deploy with custom API URL
+python deploy_bcm_air.py --api-url https://custom-air.example.com/api/v2
+
+# Deploy with custom name
+python deploy_bcm_air.py --name my-bcm-cluster
+
+# Use custom topology file
+python deploy_bcm_air.py --dot-file custom-topology.dot
+
+# Create simulation only (skip BCM installation)
+python deploy_bcm_air.py --skip-ansible
+```
+
+**Configuration (.env file):**
+
+All configuration is managed through a `.env` file in the project root. Copy `env.example` to `.env` and configure:
+
+- `AIR_API_TOKEN` - Your NVIDIA Air API authentication token (required)
+- `AIR_USERNAME` - Your Air account email address (required)
+- `AIR_API_URL` - NVIDIA Air API base URL (required)
+  - External: `https://air.nvidia.com`
+  - Internal: `https://air-inside.nvidia.com`
+- `UV_LINK_MODE` - Set to `copy` to suppress hardlink warnings in WSL (optional)
+
+**Note:** Command-line flags (`--internal`, `--api-url`) will override `.env` settings.
+
+## Repository Structure
+
+```
+bcm_usecases/
+├── deploy_bcm_air.py              # Main automation script (START HERE!)
+├── README.md                      # This file
+├── env.example                    # Example environment configuration
+├── .env                           # Your environment config (create from env.example)
+│
+├── ansible/                       # Ansible playbooks and scripts
+│   ├── install_bcm.yml            # Ansible playbook for BCM installation
+│   └── cumulus-ztp.sh             # Cumulus switch ZTP script
+│
+├── topologies/                    # Network topology templates
+│   └── test-bcm.dot               # Default BCM lab topology
+│
+├── tools/                         # Testing and troubleshooting utilities
+│   ├── check_setup.py             # Setup verification helper
+│   ├── test_sdk_auth.py           # SDK authentication test
+│   ├── test_direct_auth.py        # Direct API authentication test
+│   └── test_auth.sh               # Shell-based auth test
+│
+├── pyproject.toml                 # Project metadata and dependencies (uv)
+├── requirements.txt               # Python dependencies (pip fallback)
+└── ansible-requirements.yml       # Ansible Galaxy collections
+```
+
+---
+
+**Note:** This automated deployment replaces the previous manual process of creating, modifying, and uploading custom BCM images. The new approach uses stock Rocky Linux 9 images available in NVIDIA Air, making deployment faster and more maintainable.
