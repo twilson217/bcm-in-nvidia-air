@@ -33,7 +33,7 @@ This solution automates the complete BCM deployment process:
 1. **NVIDIA Air account** with API access
    - External site: [air.nvidia.com](https://air.nvidia.com) - publicly accessible
    - Internal site (NVIDIA employees): [air-inside.nvidia.com](https://air-inside.nvidia.com) - **requires NVIDIA VPN or internal network**
-2. **Python 3.8+** installed locally
+2. **Python 3.10+** installed locally
 3. **NVIDIA Air API token** (generate from your Air account settings)
 4. **BCM ISO file** (~5GB) - Download from [Bright Computing Customer Portal](https://customer.brightcomputing.com/download-iso)
    - Requires your BCM product key
