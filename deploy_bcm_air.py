@@ -768,7 +768,7 @@ class AirBCMDeployer:
             nodes = air.simulation_nodes.list(simulation=self.simulation_id)
             
             # Apply cloud-init to Ubuntu/Debian nodes that support it
-            # Skip switches and PXE boot nodes
+            # Skip switches, PXE boot nodes, and compute nodes
             configured_count = 0
             skipped_nodes = []
             
@@ -778,6 +778,12 @@ class AirBCMDeployer:
                 # Skip switches (they don't support cloud-init)
                 if any(skip in node_name.lower() for skip in ['leaf', 'spine', 'switch']):
                     skipped_nodes.append((node_name, 'switch'))
+                    continue
+                
+                # Skip compute nodes (typically PXE boot)
+                # Matches: compute0, compute1, compute-01, node01, etc.
+                if re.match(r'^(compute|node)\d+', node_name.lower()) or re.match(r'^(compute|node)-\d+', node_name.lower()):
+                    skipped_nodes.append((node_name, 'PXE boot (compute node)'))
                     continue
                 
                 # Skip nodes that are likely PXE boot (check OS if available)
