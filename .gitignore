@@ -8,6 +8,9 @@
 # Cloud-init config with SSH keys (use .example template)
 cloud-init-password.yaml
 
+# Generated SSH configs (contain simulation-specific details)
+.ssh/
+
 # Python
 __pycache__/
 *.py[cod]
