@@ -33,8 +33,8 @@ This solution automates the complete BCM deployment process:
 
 1. Clone this repository:
 ```bash
-git clone <repository-url>
-cd bcm_usecases
+git clone https://gitlab-master.nvidia.com/travisw/bcm-in-nvidia-air.git
+cd bcm-in-nvidia-air
 ```
 
 2. Install uv (fast Python package installer):
@@ -502,7 +502,7 @@ All configuration is managed through a `.env` file in the project root. Copy `en
 ## Repository Structure
 
 ```
-bcm_usecases/
+bcm-in-nvidia-air/
 ├── deploy_bcm_air.py              # Main automation script (START HERE!)
 ├── README.md                      # This file
 ├── env.example                    # Example environment configuration
