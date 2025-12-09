@@ -601,10 +601,10 @@ class AirBCMDeployer:
     def enable_ssh_service(self):
         """
         Enable SSH service for the simulation using the Air SDK.
-        Creates an SSH service directly on the BCM head node (eth1 port 22).
+        Creates an SSH service directly on the BCM head node (eth0 port 22).
         
-        Note: eth0 is reserved for Air's OOB management network.
-        eth1 is connected to "fake0:outbound" for external access.
+        Note: When using JSON format with oob:false, eth0 can be connected
+        to "outbound" for direct external access.
         
         This allows direct SSH access to BCM without going through oob-mgmt-server,
         which avoids password configuration issues with Air-managed nodes.
@@ -613,7 +613,7 @@ class AirBCMDeployer:
             Service object if successful, None otherwise
         """
         print("\nEnabling SSH service for simulation...")
-        print(f"  Creating SSH service on {self.bcm_node_name}:eth1...")
+        print(f"  Creating SSH service on {self.bcm_node_name}:eth0...")
         
         try:
             from air_sdk import AirApi
@@ -629,11 +629,11 @@ class AirBCMDeployer:
             sim = air.simulations.get(self.simulation_id)
             
             # Create SSH service directly on BCM head node
-            # eth1 is connected to fake0:outbound for external access
-            # (eth0 is reserved for Air's OOB management)
+            # eth0 is connected to "outbound" for external access
+            # (requires JSON topology with oob:false)
             service = sim.create_service(
                 name='bcm-ssh',
-                interface=f'{self.bcm_node_name}:eth1',
+                interface=f'{self.bcm_node_name}:eth0',
                 dest_port=22,
                 service_type='ssh'
             )
