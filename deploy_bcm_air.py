@@ -300,12 +300,12 @@ class AirBCMDeployer:
         
         try:
             # Use the v2 simulation import endpoint
-            # Disable auto OOB since we connect bcm-01:eth0 directly to outbound
             payload = {
                 'format': 'DOT',
                 'title': simulation_name,
                 'content': dot_content,
-                'oob': False,  # Disable automatic OOB management network
+                # Note: OOB is controlled by the topology content, not a separate param
+                # Use a "fake" node with "outbound" interface for external access
                 # Optional: add ZTP script if available
                 # 'ztp': ztp_script_content
             }

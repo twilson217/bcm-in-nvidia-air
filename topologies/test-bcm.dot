@@ -6,6 +6,7 @@ graph "bcm-air-poc" {
   "ubuntu0" [function="server" memory="1024" os="generic/ubuntu2204" cpu="1" mgmt_ip="192.168.200.10"]
   "leaf01" [function="leaf" memory="4096" os="cumulus-vx-5.15.0" cpu="3" mgmt_ip="192.168.200.12"]
   "leaf02" [function="leaf" memory="4096" os="cumulus-vx-5.15.0" cpu="3" mgmt_ip="192.168.200.13"]
+  "fake0" [function="fake" os="generic/ubuntu2204"]
 
   "leaf01":"swp51" -- "leaf02":"swp51"
   "ubuntu0":"eth1" -- "leaf01":"swp1"
@@ -16,7 +17,7 @@ graph "bcm-air-poc" {
   "compute1":"eth2" -- "leaf02":"swp3"
   "compute2":"eth1" -- "leaf01":"swp4"
   "compute2":"eth2" -- "leaf02":"swp4"
-  "bcm-01":"eth0" -- "outbound"
+  "bcm-01":"eth0" -- "fake0":"outbound"
   "bcm-01":"eth1" -- "leaf01":"swp5"
   "bcm-01":"eth2" -- "leaf02":"swp5"
 }
