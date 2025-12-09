@@ -201,6 +201,49 @@ class AirBCMDeployer:
         self.bcm_node_name = bcm_nodes[0]
         return bcm_nodes[0]
     
+    def detect_bcm_nodes_json(self, nodes_dict):
+        """
+        Detect BCM node(s) from a JSON topology nodes dictionary.
+        Looks for nodes named like 'bcm-01', 'bcm-02', 'bcm-headnode0', etc.
+        Returns the primary BCM node (lowest number if multiple exist).
+        
+        Args:
+            nodes_dict: Dictionary of nodes from JSON topology content
+            
+        Returns:
+            String name of the primary BCM node
+            
+        Raises:
+            Exception if no BCM node is found
+        """
+        import re
+        
+        # Filter for BCM nodes (start with 'bcm' or 'bcm-')
+        bcm_nodes = []
+        for node_name in nodes_dict.keys():
+            if re.match(r'^bcm[-_]?', node_name, re.IGNORECASE):
+                bcm_nodes.append(node_name)
+        
+        if not bcm_nodes:
+            raise Exception(
+                "No BCM node found in topology file.\n"
+                "Expected a node starting with 'bcm' (e.g., 'bcm-01', 'bcm-headnode0').\n"
+                "See README for topology file guidelines."
+            )
+        
+        # If multiple BCM nodes, sort and pick the one with lowest number
+        if len(bcm_nodes) > 1:
+            def get_node_number(name):
+                numbers = re.findall(r'\d+', name)
+                return int(numbers[0]) if numbers else 999
+            
+            bcm_nodes.sort(key=get_node_number)
+            print(f"\n  ℹ Multiple BCM nodes detected: {', '.join(bcm_nodes)}")
+            print(f"  ℹ Using primary node: {bcm_nodes[0]}")
+        
+        self.bcm_node_name = bcm_nodes[0]
+        return bcm_nodes[0]
+    
     def get_next_simulation_name(self):
         """
         Generate the next simulation name following the pattern YYYYMMNNN-BCM-Lab
@@ -275,12 +318,12 @@ class AirBCMDeployer:
             print(f"Using default name: {default_name}")
             return default_name
     
-    def create_simulation(self, dot_file_path, simulation_name):
+    def create_simulation(self, topology_file_path, simulation_name):
         """
-        Create a simulation from a .dot file
+        Create a simulation from a topology file (.dot or .json)
         
         Args:
-            dot_file_path: Path to the .dot topology file
+            topology_file_path: Path to the topology file (.dot or .json)
             simulation_name: Name for the simulation
         
         Returns:
@@ -290,26 +333,45 @@ class AirBCMDeployer:
         print("Creating NVIDIA Air Simulation")
         print("="*60)
         
-        dot_content = self.read_dot_file(dot_file_path)
+        topology_path = Path(topology_file_path)
+        file_ext = topology_path.suffix.lower()
         
-        # Detect BCM node from topology
-        bcm_node = self.detect_bcm_nodes(dot_content)
-        print(f"\n  ✓ Detected BCM node: {bcm_node}")
-        
-        print(f"\nCreating simulation from DOT file: {simulation_name}")
-        
-        try:
-            # Use the v2 simulation import endpoint
+        # Prepare payload based on file format
+        if file_ext == '.json':
+            # JSON format - read and parse
+            with open(topology_path, 'r') as f:
+                topology_data = json.load(f)
+            
+            # Detect BCM node from JSON topology
+            nodes = topology_data.get('content', {}).get('nodes', {})
+            bcm_node = self.detect_bcm_nodes_json(nodes)
+            print(f"\n  ✓ Detected BCM node: {bcm_node}")
+            
+            print(f"\nCreating simulation from JSON file: {simulation_name}")
+            
+            # Override title with our simulation name
+            topology_data['title'] = simulation_name
+            payload = topology_data
+            content_size = len(json.dumps(topology_data))
+            
+        else:
+            # DOT format (default)
+            dot_content = self.read_dot_file(topology_file_path)
+            
+            # Detect BCM node from DOT topology
+            bcm_node = self.detect_bcm_nodes(dot_content)
+            print(f"\n  ✓ Detected BCM node: {bcm_node}")
+            
+            print(f"\nCreating simulation from DOT file: {simulation_name}")
+            
             payload = {
                 'format': 'DOT',
                 'title': simulation_name,
                 'content': dot_content,
-                # Note: OOB is controlled by the topology content, not a separate param
-                # Use a "fake" node with "outbound" interface for external access
-                # Optional: add ZTP script if available
-                # 'ztp': ztp_script_content
             }
-            
+            content_size = len(dot_content)
+        
+        try:
             response = requests.post(
                 f"{self.api_base_url}/api/v2/simulations/import/",
                 headers=self.headers,
@@ -354,7 +416,7 @@ class AirBCMDeployer:
                 print(f"Response: {response.text}")
                 print(f"Request URL: {self.api_base_url}/api/v2/simulations/import/")
                 print(f"Request payload keys: {list(payload.keys())}")
-                print(f"DOT file size: {len(dot_content)} bytes")
+                print(f"Topology file size: {content_size} bytes")
                 raise Exception("Failed to create simulation")
                 
         except requests.exceptions.ConnectionError as e:
@@ -1066,9 +1128,10 @@ Examples:
         help='Use internal NVIDIA Air site (air-inside.nvidia.com)'
     )
     parser.add_argument(
-        '--dot-file',
-        default='topologies/test-bcm.dot',
-        help='Path to topology .dot file (default: topologies/test-bcm.dot)'
+        '--topology', '--dot-file',
+        dest='topology_file',
+        default='topologies/test-bcm.json',
+        help='Path to topology file (.json or .dot). JSON format supports oob:false. (default: topologies/test-bcm.json)'
     )
     parser.add_argument(
         '--name',
@@ -1117,12 +1180,12 @@ Examples:
             simulation_name = deployer.prompt_simulation_name()
         
         # Create simulation
-        dot_file = Path(args.dot_file)
-        if not dot_file.exists():
-            print(f"\n✗ Error: Topology file not found: {dot_file}")
+        topology_file = Path(args.topology_file)
+        if not topology_file.exists():
+            print(f"\n✗ Error: Topology file not found: {topology_file}")
             sys.exit(1)
         
-        deployer.create_simulation(dot_file, simulation_name)
+        deployer.create_simulation(topology_file, simulation_name)
         
         # Configure passwords via cloud-init (before starting simulation)
         # This is the preferred method - passwords set at boot time

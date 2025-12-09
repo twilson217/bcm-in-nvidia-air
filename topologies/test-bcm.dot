@@ -1,6 +1,4 @@
 graph "bcm-air-poc" {
-  "oob-mgmt-server" [function="oob-server" cpu="2" memory="2048"]
-  "oob-mgmt-switch" [function="oob-switch" mgmt_ip="192.168.200.251"]
   "fake0" [function="fake" os="generic/ubuntu2204"]
   
   "bcm-01" [memory="8192" os="generic/ubuntu2404" cpu="4" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
@@ -11,15 +9,6 @@ graph "bcm-air-poc" {
   "leaf01" [function="leaf" memory="4096" os="cumulus-vx-5.15.0" cpu="3" mgmt_ip="192.168.200.12"]
   "leaf02" [function="leaf" memory="4096" os="cumulus-vx-5.15.0" cpu="3" mgmt_ip="192.168.200.13"]
 
-  "oob-mgmt-server":"eth1" -- "oob-mgmt-switch":"swp1"
-  "bcm-01":"eth0" -- "oob-mgmt-switch":"swp2"
-  "ubuntu0":"eth0" -- "oob-mgmt-switch":"swp3"
-  "leaf01":"eth0" -- "oob-mgmt-switch":"swp4"
-  "leaf02":"eth0" -- "oob-mgmt-switch":"swp5"
-  "compute0":"eth0" -- "oob-mgmt-switch":"swp6"
-  "compute1":"eth0" -- "oob-mgmt-switch":"swp7"
-  "compute2":"eth0" -- "oob-mgmt-switch":"swp8"
-  
   "bcm-01":"eth1" -- "fake0":"outbound"
   
   "leaf01":"swp51" -- "leaf02":"swp51"
