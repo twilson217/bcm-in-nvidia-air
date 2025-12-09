@@ -1,5 +1,5 @@
 ---
-# Ansible Playbook for BCM Installation on Rocky Linux 9
+# Ansible Playbook for BCM Installation on Ubuntu 24.04
 # This playbook installs BCM 10.x or 11.x using Bright Computing Ansible Galaxy collections
 
 - name: Install and Configure Bright Cluster Manager

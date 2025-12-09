@@ -2,7 +2,7 @@
 
 # Automated BCM Deployment on NVIDIA Air
 
-This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Rocky Linux 9 images and Ansible Galaxy playbooks. No custom image creation or manual configuration required!
+This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images and Ansible Galaxy playbooks. No custom image creation or manual configuration required!
 
 ## Overview
 
@@ -14,7 +14,7 @@ This solution automates the complete BCM deployment process:
 
 **Key Benefits:**
 - No custom image creation or upload required
-- Uses stock Rocky Linux 9 images available in Air
+- Uses stock Ubuntu 24.04 images available in Air
 - Choose BCM 10.x or 11.x at deployment time
 - Fully automated via NVIDIA Air APIs
 - Complete deployment in ~15-20 minutes
@@ -528,4 +528,4 @@ bcm_usecases/
 
 ---
 
-**Note:** This automated deployment replaces the previous manual process of creating, modifying, and uploading custom BCM images. The new approach uses stock Rocky Linux 9 images available in NVIDIA Air, making deployment faster and more maintainable.
+**Note:** This automated deployment replaces the previous manual process of creating, modifying, and uploading custom BCM images. The new approach uses stock Ubuntu 24.04 images available in NVIDIA Air, making deployment faster and more maintainable.

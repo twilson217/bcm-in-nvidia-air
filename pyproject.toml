@@ -1,7 +1,7 @@
 [project]
 name = "bcm-air-deployment"
 version = "1.0.0"
-description = "Automated BCM deployment on NVIDIA Air using stock Rocky Linux images"
+description = "Automated BCM deployment on NVIDIA Air using stock Ubuntu 24.04 images"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
