@@ -595,9 +595,90 @@ class AirBCMDeployer:
             print(f"  Warning: Could not retrieve SSH service info: {e}")
             return None
     
+    def configure_node_passwords_cloudinit(self):
+        """
+        Configure passwords on nodes using cloud-init (preferred method)
+        This sets passwords at boot time, before any SSH attempts
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        print("\nConfiguring node passwords via cloud-init...")
+        print(f"  Target password: {self.default_password}")
+        
+        # Load cloud-init template
+        cloudinit_template_path = Path(__file__).parent / 'cloud-init-password.yaml'
+        if not cloudinit_template_path.exists():
+            print(f"  ⚠ Cloud-init template not found: {cloudinit_template_path}")
+            return False
+        
+        # Read template and substitute password
+        cloudinit_template = cloudinit_template_path.read_text()
+        cloudinit_content = cloudinit_template.replace('{PASSWORD}', self.default_password)
+        
+        try:
+            # Get all nodes in simulation
+            response = requests.get(
+                f"{self.api_base_url}/api/v2/simulations/nodes/",
+                headers=self.headers,
+                timeout=30
+            )
+            
+            if response.status_code != 200:
+                print(f"  ✗ Failed to get nodes: {response.status_code}")
+                return False
+            
+            all_nodes = response.json().get('results', [])
+            sim_nodes = [n for n in all_nodes if n.get('simulation') == self.simulation_id]
+            
+            # Apply cloud-init to Ubuntu/Debian based nodes (not Cumulus switches)
+            configured_count = 0
+            for node in sim_nodes:
+                node_name = node.get('name')
+                node_id = node.get('id')
+                node_os = node.get('os', '').lower()
+                
+                # Skip switches and PXE nodes
+                if 'cumulus' in node_os or 'pxe' in node_os or 'leaf' in node_name or 'spine' in node_name:
+                    continue
+                
+                print(f"  Applying cloud-init to {node_name}...")
+                
+                # Try to apply cloud-init user-data
+                # Note: The API might expect a script UUID, but we'll try inline content first
+                patch_data = {
+                    'user_data': cloudinit_content
+                }
+                
+                patch_response = requests.patch(
+                    f"{self.api_base_url}/api/v2/simulations/nodes/{node_id}/cloud-init/",
+                    headers=self.headers,
+                    json=patch_data,
+                    timeout=30
+                )
+                
+                if patch_response.status_code in [200, 201]:
+                    print(f"    ✓ Cloud-init applied to {node_name}")
+                    configured_count += 1
+                else:
+                    print(f"    ⚠ Could not apply cloud-init to {node_name}: {patch_response.status_code}")
+                    print(f"      Response: {patch_response.text[:200]}")
+            
+            if configured_count > 0:
+                print(f"\n  ✓ Cloud-init configured on {configured_count} nodes")
+                print(f"  ℹ Note: Nodes must be rebuilt/reset for cloud-init to take effect")
+                return True
+            else:
+                print(f"\n  ⚠ Could not configure cloud-init on any nodes")
+                return False
+                
+        except Exception as e:
+            print(f"  ✗ Error configuring cloud-init: {e}")
+            return False
+    
     def configure_node_passwords(self, ssh_info):
         """
-        Configure passwords on all nodes in the simulation via SSH
+        Configure passwords on all nodes in the simulation via SSH (fallback method)
         
         Args:
             ssh_info: dict with SSH connection details
@@ -606,7 +687,7 @@ class AirBCMDeployer:
             print("  ⚠ Cannot configure passwords without SSH service info")
             return False
         
-        print("\nConfiguring node passwords...")
+        print("\nConfiguring node passwords via SSH...")
         print(f"  Using password: {self.default_password}")
         
         # Create a temporary expect script to handle password changes
@@ -962,6 +1043,10 @@ Examples:
         
         deployer.create_simulation(dot_file, simulation_name)
         
+        # Note: Cloud-init configuration via API requires pre-creating script objects
+        # For now, we'll use SSH-based password configuration after boot
+        # TODO: Implement cloud-init script object creation for cleaner password setup
+        
         # Start the simulation
         deployer.start_simulation()
         
@@ -997,7 +1082,7 @@ Examples:
             print("\n✗ Error: Could not create SSH config")
             return 1
         
-        # Configure passwords on nodes
+        # Configure passwords via SSH (after nodes are booted and accessible)
         deployer.configure_node_passwords(ssh_info)
         
         if not args.skip_ansible:

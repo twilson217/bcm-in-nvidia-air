@@ -155,12 +155,15 @@ During deployment, you'll be prompted to:
 - Use default password: `Nvidia1234!`
 - Or specify your own custom password
 
-The script will automatically:
-1. Configure the password on oob-mgmt-server via SSH
-2. Create SSH config file (`.ssh/<simulation-name>`) with connection details
-3. Enable password authentication for Ansible access to nodes
+The script automatically configures passwords via SSH using `expect`:
+1. Connects to oob-mgmt-server via SSH
+2. Detects and handles interactive password change prompts
+3. Sets your custom password on the OOB server
+4. Enables password authentication for Ansible
 
 **Requirements:** `expect` must be installed (`sudo apt install expect`)
+
+**Future Enhancement:** Cloud-init support (`cloud-init-password.yaml`) is included for future implementation when Air's script object API is better documented.
 
 **BCM Shell:**
 ```bash
@@ -676,16 +679,19 @@ bcm-in-nvidia-air/
 ├── README.md                      # This file
 ├── env.example                    # Example environment configuration
 ├── .env                           # Your environment config (create from env.example)
+├── cloud-init-password.yaml       # Cloud-init template for password configuration
 │
 ├── ansible/                       # Ansible playbooks and scripts
 │   ├── install_bcm.yml            # Ansible playbook for BCM installation
 │   └── cumulus-ztp.sh             # Cumulus switch ZTP script
 │
 ├── topologies/                    # Network topology templates
-│   └── test-bcm.dot               # Default BCM lab topology
+│   ├── test-bcm.dot               # Default BCM lab topology
+│   └── simple-bcm.dot             # Simplified topology example
 │
 ├── tools/                         # Testing and troubleshooting utilities
 │   ├── check_setup.py             # Setup verification helper
+│   ├── check_sim_state.py         # Debug tool for simulation state
 │   ├── test_sdk_auth.py           # SDK authentication test
 │   ├── test_direct_auth.py        # Direct API authentication test
 │   └── test_auth.sh               # Shell-based auth test
