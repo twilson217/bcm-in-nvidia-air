@@ -60,6 +60,14 @@ class AirBCMDeployer:
             print("  AIR_USERNAME=your_email@domain.com")
             raise ValueError("AIR_USERNAME must be set")
         
+        # Load SSH key paths from environment
+        self.ssh_private_key = os.getenv('SSH_PRIVATE_KEY', '~/.ssh/id_rsa')
+        self.ssh_public_key = os.getenv('SSH_PUBLIC_KEY', '~/.ssh/id_rsa.pub')
+        
+        # Expand ~ to home directory
+        self.ssh_private_key = os.path.expanduser(self.ssh_private_key)
+        self.ssh_public_key = os.path.expanduser(self.ssh_public_key)
+        
         # Authenticate and get JWT token
         self.jwt_token = self._authenticate()
         
@@ -144,6 +152,50 @@ class AirBCMDeployer:
             print(f"Using default password: Nvidia1234!")
         
         return self.default_password
+    
+    def ensure_cloud_init_config(self):
+        """
+        Ensure cloud-init-password.yaml exists by generating it from template.
+        Uses SSH_PUBLIC_KEY from .env to populate the SSH key.
+        
+        Returns:
+            Path to cloud-init config file
+        """
+        cloudinit_path = Path(__file__).parent / 'cloud-init-password.yaml'
+        template_path = Path(__file__).parent / 'cloud-init-password.yaml.example'
+        
+        if cloudinit_path.exists():
+            print(f"  ✓ Using existing cloud-init config: {cloudinit_path.name}")
+            return cloudinit_path
+        
+        # Need to generate from template
+        if not template_path.exists():
+            print(f"  ✗ Cloud-init template not found: {template_path}")
+            raise FileNotFoundError(f"Missing template: {template_path}")
+        
+        # Read public key
+        ssh_pub_key_path = Path(self.ssh_public_key)
+        if not ssh_pub_key_path.exists():
+            print(f"\n✗ SSH public key not found: {self.ssh_public_key}")
+            print(f"\nPlease check SSH_PUBLIC_KEY in your .env file.")
+            print(f"Current value: {self.ssh_public_key}")
+            raise FileNotFoundError(f"SSH public key not found: {self.ssh_public_key}")
+        
+        ssh_public_key_content = ssh_pub_key_path.read_text().strip()
+        
+        # Read template and replace placeholder
+        template_content = template_path.read_text()
+        
+        # Replace the placeholder with actual key
+        cloudinit_content = template_content.replace('YOUR_SSH_PUBLIC_KEY_HERE', ssh_public_key_content)
+        
+        # Write the generated config
+        cloudinit_path.write_text(cloudinit_content)
+        
+        print(f"  ✓ Generated cloud-init config from template")
+        print(f"    SSH public key: {self.ssh_public_key}")
+        
+        return cloudinit_path
     
     def read_dot_file(self, dot_file_path):
         """Read and return the contents of the .dot topology file"""
@@ -711,10 +763,11 @@ class AirBCMDeployer:
             print("  ⚠ air_sdk not installed. Install with: pip install air-sdk")
             return False
         
-        # Load cloud-init template
-        cloudinit_template_path = Path(__file__).parent / 'cloud-init-password.yaml'
-        if not cloudinit_template_path.exists():
-            print(f"  ⚠ Cloud-init template not found: {cloudinit_template_path}")
+        # Ensure cloud-init config exists (auto-generate from template if needed)
+        try:
+            cloudinit_template_path = self.ensure_cloud_init_config()
+        except FileNotFoundError as e:
+            print(f"  ⚠ {e}")
             return False
         
         # Read template and substitute password
@@ -945,7 +998,7 @@ Host air-{self.bcm_node_name}
   Port {ssh_info['port']}
   User root
   PreferredAuthentications publickey,password
-  IdentityFile ~/.ssh/id_rsa
+  IdentityFile {self.ssh_private_key}
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
 
@@ -955,7 +1008,7 @@ Host bcm
   Port {ssh_info['port']}
   User root
   PreferredAuthentications publickey,password
-  IdentityFile ~/.ssh/id_rsa
+  IdentityFile {self.ssh_private_key}
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
 """
