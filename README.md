@@ -57,12 +57,14 @@ export UV_LINK_MODE=copy
 uv pip install -e .
 ```
 
-5. Install system Ansible (required for ansible-galaxy):
+5. Install system Ansible and expect (required for automation):
 ```bash
-sudo apt install -y software-properties-common
+sudo apt install -y software-properties-common expect
 sudo add-apt-repository --yes --update ppa:ansible/ansible
 sudo apt install -y ansible
 ```
+
+**Note:** `expect` is used for automated password configuration on nodes.
 
 6. Install Ansible collections:
 ```bash
@@ -125,13 +127,40 @@ The script will:
 
 ### Access Your BCM Environment
 
-After deployment completes:
+After deployment completes, the script automatically:
+- ✅ Enables SSH service for the simulation
+- ✅ Creates `.ssh/config` file for easy SSH access
+- ✅ Configures ProxyJump through oob-mgmt-server
 
-**SSH Access:**
+**Easy SSH Access (using generated config):**
 ```bash
-ssh root@192.168.200.254
-Password: 3tango
+# SSH to OOB management server
+ssh -F .ssh/config air-oob
+
+# SSH to BCM head node (via ProxyJump)
+ssh -F .ssh/config air-bcm-01
+
+# Your SSH key from ~/.ssh/id_rsa is automatically used
 ```
+
+**Manual SSH Access (if needed):**
+```bash
+# Via Air console (click "SSH" in Air UI)
+# Or via ProxyJump manually:
+ssh -J ubuntu@workerNN.air-inside.nvidia.com:PORT root@bcm-01
+```
+
+**Automated Password Configuration:**
+During deployment, you'll be prompted to:
+- Use default password: `Nvidia1234!`
+- Or specify your own custom password
+
+The script will automatically:
+1. Configure the password on oob-mgmt-server via SSH
+2. Create SSH config file (`.ssh/<simulation-name>`) with connection details
+3. Enable password authentication for Ansible access to nodes
+
+**Requirements:** `expect` must be installed (`sudo apt install expect`)
 
 **BCM Shell:**
 ```bash
@@ -139,7 +168,7 @@ cmsh
 ```
 
 **BCM GUI Access:**
-1. In NVIDIA Air, use "ADD SERVICE" to expose TCP port 8081 on bcm-headnode0
+1. In NVIDIA Air, use "ADD SERVICE" to expose TCP port 8081 on bcm-01
 2. Access BCM web interface:
    - `https://<worker_url>:<port>/userportal`
    - `https://<worker_url>:<port>/base-view`
@@ -150,7 +179,7 @@ The deployment creates the following environment:
 
 | Node name        | IP address        | MAC address       | Function          |
 | ---------------- | ----------------- | ----------------- | ----------------- |
-| bcm-headnode0    | 192.168.200.254   | (auto)            | BCM head node     |
+| bcm-01           | 192.168.200.254   | (auto)            | BCM head node     |
 | oob-mgmt-server  | 192.168.200.1     | (auto)            | OOB management    |
 | oob-mgmt-switch  | 192.168.200.251   | (auto)            | OOB switch        |
 | leaf01           | 192.168.200.12    | 44:38:39:22:AA:02 | Cumulus switch    |
@@ -180,6 +209,103 @@ Network: `192.168.200.0/24` (internal OOB management network)
 - `tools/test_sdk_auth.py` - Test Air SDK authentication
 - `tools/test_direct_auth.py` - Test direct API authentication
 
+## Creating Custom Topology Files
+
+You can create your own network topologies for different lab scenarios. The automation script automatically detects your BCM node and configures it.
+
+### BCM Node Naming Requirements
+
+**The script will automatically detect your BCM node if it:**
+- Starts with `bcm` (case-insensitive)
+- Examples: `bcm-01`, `bcm-headnode0`, `bcm-primary`, `bcm01`, `bcm_head_01`
+
+**If multiple BCM nodes exist** (for future HA scenarios):
+- The script selects the node with the **lowest number** as the primary
+- Example: In a topology with `bcm-01` and `bcm-02`, `bcm-01` is automatically selected
+
+### Topology File Guidelines
+
+1. **File Format**: Use GraphViz DOT format (`.dot` extension)
+
+2. **BCM Node Requirements**:
+   ```dot
+   "bcm-01" [memory="4096" os="generic/ubuntu2404" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
+   ```
+   - **Required**: Node name starting with `bcm`
+   - **Recommended**: `memory="4096"` (minimum for BCM)
+   - **Recommended**: `storage="200"` (200GB for BCM data)
+   - **Recommended**: `mgmt_ip` for predictable OOB IP address
+
+3. **Interface Naming**:
+   - `eth0` is reserved for Air's automatic OOB management
+   - Use `eth1`, `eth2`, `eth3`, etc. for data plane connections
+   - Example:
+     ```dot
+     "bcm-01":"eth1" -- "leaf01":"swp1"
+     "bcm-01":"eth2" -- "leaf02":"swp1"
+     ```
+
+4. **Network Nodes** (compute servers, switches):
+   - Add `mgmt_ip` for OOB management IP addressing
+   - Use `os="pxe"` and `boot="network"` for PXE boot nodes
+   - Example:
+     ```dot
+     "compute0" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="20" mgmt_ip="192.168.200.14"]
+     ```
+
+### Example Custom Topology
+
+Create a new file in `topologies/my-lab.dot`:
+
+```dot
+graph "my-bcm-lab" {
+  // BCM Head Node (automatically detected)
+  "bcm-primary" [memory="4096" os="generic/ubuntu2404" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
+  
+  // Compute Nodes
+  "node01" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="50" mgmt_ip="192.168.200.101"]
+  "node02" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="50" mgmt_ip="192.168.200.102"]
+  
+  // Network Switches
+  "spine01" [function="spine" memory="2048" os="cumulus-vx-5.14.0" cpu="2" mgmt_ip="192.168.200.11"]
+  "leaf01" [function="leaf" memory="4096" os="cumulus-vx-5.14.0" cpu="3" mgmt_ip="192.168.200.21"]
+  
+  // Connections (avoid eth0, it's reserved for OOB)
+  "bcm-primary":"eth1" -- "leaf01":"swp1"
+  "node01":"eth1" -- "leaf01":"swp2"
+  "node02":"eth1" -- "leaf01":"swp3"
+  "leaf01":"swp51" -- "spine01":"swp1"
+}
+```
+
+### Using Your Custom Topology
+
+```bash
+# Deploy with custom topology
+python deploy_bcm_air.py --dot-file topologies/my-lab.dot
+
+# Or with internal Air site
+python deploy_bcm_air.py --internal --dot-file topologies/my-lab.dot
+```
+
+### Validation
+
+The script will:
+1. ✅ Automatically detect your BCM node (e.g., `bcm-primary`)
+2. ✅ Validate that at least one BCM node exists
+3. ✅ Select the primary node if multiple BCM nodes are present
+4. ✅ Display the detected node name during deployment
+
+If validation fails, you'll see a clear error message with guidance.
+
+### Tips for Custom Topologies
+
+- **Start simple**: Begin with the default `test-bcm.dot` and modify incrementally
+- **Test topology syntax**: Use GraphViz tools to visualize before deployment
+- **Plan IP addressing**: Keep BCM on `192.168.200.254` for consistency
+- **Memory for Cumulus**: Cumulus VX 5.14.0 requires minimum 4096MB RAM
+- **Future HA support**: Name additional BCM nodes sequentially (`bcm-01`, `bcm-02`)
+
 ## Next Steps: Device Onboarding
 
 After BCM is installed, you'll need to onboard the switches and compute nodes into BCM management.
@@ -197,11 +323,11 @@ sudo service isc-dhcp-server status
 
 ### 2. Configure BCM Network Gateway
 
-SSH to bcm-headnode0 and configure the network gateway:
+SSH to bcm-01 and configure the network gateway:
 
 ```bash
 ssh root@192.168.200.254
-# Password: 3tango
+# Password: Nvidia1234! (or your custom password if specified)
 
 # Enter BCM shell
 cmsh
@@ -332,7 +458,7 @@ cmd -v
 
 The BCM web interface runs on port 8081. To access it:
 
-1. In NVIDIA Air, use "ADD SERVICE" to expose TCP port 8081 on bcm-headnode0
+1. In NVIDIA Air, use "ADD SERVICE" to expose TCP port 8081 on bcm-01
 2. Access the GUI at:
    - `https://<worker_url>:<tcp_port>/userportal`
    - `https://<worker_url>:<tcp_port>/base-view`
@@ -356,7 +482,7 @@ The Air Agent will be installed and enabled as a systemd service, allowing API-b
 ### BCM Installation Issues
 
 If BCM installation fails, check:
-- Network connectivity on bcm-headnode0
+- Network connectivity on bcm-01
 - Available disk space: `df -h`
 - BCM logs: `/var/log/cmd.log`
 
@@ -416,6 +542,49 @@ Failed to resolve 'air-inside.nvidia.com'
 1. Connect to NVIDIA VPN and try again
 2. Use the external site instead: `python deploy_bcm_air.py` (remove `--internal` flag)
 3. Verify you can access https://air-inside.nvidia.com in your browser
+
+### SSH Access Issues
+
+**SSH Key Only Works on oob-mgmt-server:**
+
+Air automatically adds your SSH key to `oob-mgmt-server`, but not to other nodes. To enable password-less SSH to all nodes:
+
+**Option 1: Copy SSH key to nodes (recommended)**
+```bash
+# From oob-mgmt-server, copy key to BCM node
+ssh -F .ssh/config air-oob
+ssh-copy-id root@bcm-01
+# Enter password when prompted (default: Nvidia1234!)
+```
+
+**Option 2: Use password authentication**
+```bash
+# Install sshpass if needed
+sudo apt install sshpass
+
+# SSH with password
+sshpass -p 'Nvidia1234!' ssh -F .ssh/config air-bcm-01
+```
+
+**SSH Key Permission Errors in WSL:**
+
+If you get "UNPROTECTED PRIVATE KEY FILE" error:
+```bash
+# Create new key on WSL filesystem (not Windows /mnt/c/)
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa2
+
+# Upload new key to Air (copy contents of ~/.ssh/id_rsa2.pub to Air profile)
+
+# Update config to use new key
+# The generated .ssh/config automatically uses ~/.ssh/id_rsa
+```
+
+**Password Change Prompt:**
+
+If you see "You must change your password now" when connecting:
+- This is the default Ubuntu behavior
+- The script sets the default password during deployment
+- Use the password you specified (or Nvidia1234! if using default)
 
 ### Ansible Playbook Failures
 

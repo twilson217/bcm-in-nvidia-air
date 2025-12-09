@@ -125,10 +125,81 @@ class AirBCMDeployer:
             else:
                 print("Invalid choice. Please enter 1 or 2.")
     
+    def prompt_default_password(self):
+        """Prompt user for default password for nodes"""
+        print("\n" + "="*60)
+        print("Default Password Configuration")
+        print("="*60)
+        print("\nSet the default password for all nodes in the simulation.")
+        print(f"Default: Nvidia1234!")
+        print("Press Enter to use default, or type a custom password:")
+        
+        user_input = input("> ").strip()
+        
+        if user_input:
+            self.default_password = user_input
+            print(f"Using custom password: {user_input}")
+        else:
+            self.default_password = "Nvidia1234!"
+            print(f"Using default password: Nvidia1234!")
+        
+        return self.default_password
+    
     def read_dot_file(self, dot_file_path):
         """Read and return the contents of the .dot topology file"""
         with open(dot_file_path, 'r') as f:
             return f.read()
+    
+    def detect_bcm_nodes(self, dot_content):
+        """
+        Detect BCM node(s) from the topology file.
+        Looks for nodes named like 'bcm-01', 'bcm-02', 'bcm-headnode0', etc.
+        Returns the primary BCM node (lowest number if multiple exist).
+        
+        Args:
+            dot_content: String content of the DOT file
+            
+        Returns:
+            String name of the primary BCM node
+            
+        Raises:
+            Exception if no BCM node is found
+        """
+        import re
+        
+        # Pattern to match node definitions: "node-name" [attributes]
+        node_pattern = r'"([^"]+)"\s*\['
+        
+        # Find all node names
+        nodes = re.findall(node_pattern, dot_content)
+        
+        # Filter for BCM nodes (start with 'bcm' or 'bcm-')
+        bcm_nodes = []
+        for node in nodes:
+            # Match patterns like: bcm-01, bcm-headnode0, bcm01, bcm-head-01, etc.
+            if re.match(r'^bcm[-_]?', node, re.IGNORECASE):
+                bcm_nodes.append(node)
+        
+        if not bcm_nodes:
+            raise Exception(
+                "No BCM node found in topology file.\n"
+                "Expected a node starting with 'bcm' (e.g., 'bcm-01', 'bcm-headnode0').\n"
+                "See README for topology file guidelines."
+            )
+        
+        # If multiple BCM nodes, sort and pick the one with lowest number
+        if len(bcm_nodes) > 1:
+            # Extract numbers from node names and sort
+            def get_node_number(name):
+                numbers = re.findall(r'\d+', name)
+                return int(numbers[0]) if numbers else 999
+            
+            bcm_nodes.sort(key=get_node_number)
+            print(f"\n  ℹ Multiple BCM nodes detected: {', '.join(bcm_nodes)}")
+            print(f"  ℹ Using primary node: {bcm_nodes[0]}")
+        
+        self.bcm_node_name = bcm_nodes[0]
+        return bcm_nodes[0]
     
     def get_next_simulation_name(self):
         """
@@ -220,6 +291,10 @@ class AirBCMDeployer:
         print("="*60)
         
         dot_content = self.read_dot_file(dot_file_path)
+        
+        # Detect BCM node from topology
+        bcm_node = self.detect_bcm_nodes(dot_content)
+        print(f"\n  ✓ Detected BCM node: {bcm_node}")
         
         print(f"\nCreating simulation from DOT file: {simulation_name}")
         
@@ -317,12 +392,16 @@ class AirBCMDeployer:
             Node details including IP address
         """
         print(f"\nWaiting for node '{node_name}' to be ready...")
+        print(f"  Checking for states: READY, RUNNING, LOADED, STARTED, BOOTED, UP")
         start_time = time.time()
+        last_state = None
+        check_count = 0
+        first_check = True
         
         while time.time() - start_time < timeout:
             try:
                 response = requests.get(
-                    f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/",
+                    f"{self.api_base_url}/api/v2/simulations/nodes/",
                     headers=self.headers,
                     timeout=30
                 )
@@ -330,25 +409,44 @@ class AirBCMDeployer:
                 if response.status_code == 200:
                     data = response.json()
                     # API returns paginated response with 'results' key
-                    nodes = data.get('results', [])
+                    all_nodes = data.get('results', [])
+                    
+                    # Filter nodes for this simulation only
+                    nodes = [n for n in all_nodes if n.get('simulation') == self.simulation_id]
+                    
+                    # On first check, show all node states for debugging
+                    if first_check and nodes:
+                        print(f"\n  All nodes in simulation:")
+                        for n in nodes:
+                            print(f"    • {n.get('name')}: {n.get('state', 'unknown')}")
+                        print()
+                        first_check = False
                     
                     for node in nodes:
                         if node.get('name') == node_name:
                             state = node.get('state', 'unknown')
-                            print(f"  Node '{node_name}' state: {state}                    ", end='\r')
                             
-                            if state == 'READY' or state == 'RUNNING':
+                            # Print state if it changed or every 6th check (~60 seconds)
+                            if state != last_state or check_count % 6 == 0:
+                                print(f"  Node '{node_name}' state: {state}                    ")
+                                last_state = state
+                            
+                            check_count += 1
+                            
+                            # Accept various ready states that Air might return
+                            ready_states = ['READY', 'RUNNING', 'LOADED', 'STARTED', 'BOOTED', 'UP']
+                            if state in ready_states or (state and state.upper() in ready_states):
                                 self.bcm_node_id = node.get('id')
-                                print(f"\n✓ Node '{node_name}' is ready! (State: {state})")
+                                print(f"✓ Node '{node_name}' is ready! (State: {state})")
                                 return node
                     
                     # If we get here, node not found in results
                     if not nodes:
-                        print(f"  No nodes found yet (simulation might still be initializing)...", end='\r')
+                        print(f"  No nodes found yet (simulation might still be initializing)...")
                 
                 time.sleep(10)
             except Exception as e:
-                print(f"  Error checking node status: {e}                    ", end='\r')
+                print(f"  Error checking node status: {e}                    ")
                 time.sleep(10)
         
         raise Exception(f"Timeout waiting for node '{node_name}' to be ready")
@@ -387,12 +485,54 @@ class AirBCMDeployer:
             
             if response.status_code in [200, 201, 204]:
                 print("  ✓ Simulation started successfully")
-                print("  ⏳ Nodes are now booting (this takes 2-5 minutes)...")
+                print("  ⏳ Waiting for simulation to fully load...")
             else:
                 print(f"  ✗ Failed to start simulation: {response.status_code}")
                 print(f"  Response: {response.text}")
         except Exception as e:
             print(f"  Warning: Error starting simulation: {e}")
+    
+    def wait_for_simulation_loaded(self, timeout=300):
+        """
+        Wait for simulation to reach LOADED state
+        This must complete before SSH can be enabled
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if loaded, False if timeout
+        """
+        print("\nWaiting for simulation to finish loading...")
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                response = requests.get(
+                    f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/",
+                    headers=self.headers,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    sim_data = response.json()
+                    state = sim_data.get('state', 'unknown')
+                    print(f"  Simulation state: {state}                    ", end='\r')
+                    
+                    if state == 'LOADED':
+                        print(f"\n✓ Simulation is fully loaded!                    ")
+                        return True
+                    elif state in ['ERROR', 'FAILED']:
+                        print(f"\n✗ Simulation failed to load: {state}")
+                        return False
+                
+                time.sleep(5)
+            except Exception as e:
+                print(f"  Error checking simulation state: {e}                    ", end='\r')
+                time.sleep(5)
+        
+        print(f"\n⚠ Timeout waiting for simulation to load")
+        return False
     
     def enable_ssh_service(self):
         """Enable SSH service for the simulation to allow direct SSH access"""
@@ -416,6 +556,196 @@ class AirBCMDeployer:
                 print(f"  Response: {response.text}")
         except Exception as e:
             print(f"  Warning: Error enabling SSH: {e}")
+    
+    def get_ssh_service_info(self):
+        """
+        Get SSH service details for the oob-mgmt-server
+        
+        Returns:
+            dict with 'hostname', 'port', 'username', and 'link' for SSH access
+        """
+        try:
+            # Use v1 API which has complete service information including src_port (external port)
+            response = requests.get(
+                f"{self.api_base_url}/api/v1/service/",
+                headers=self.headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # v1 API can return list directly or dict with results
+                services = data if isinstance(data, list) else data.get('results', [])
+                
+                # Look for SSH service for oob-mgmt-server
+                for service in services:
+                    if (service.get('service_type') == 'ssh' and 
+                        service.get('node_name') == 'oob-mgmt-server'):
+                        return {
+                            'hostname': service.get('host'),
+                            'port': service.get('src_port'),  # src_port is the external port
+                            'username': service.get('os_default_username', 'ubuntu'),
+                            'link': service.get('link'),
+                            'service_id': service.get('id')
+                        }
+            
+            return None
+            
+        except Exception as e:
+            print(f"  Warning: Could not retrieve SSH service info: {e}")
+            return None
+    
+    def configure_node_passwords(self, ssh_info):
+        """
+        Configure passwords on all nodes in the simulation via SSH
+        
+        Args:
+            ssh_info: dict with SSH connection details
+        """
+        if not ssh_info:
+            print("  ⚠ Cannot configure passwords without SSH service info")
+            return False
+        
+        print("\nConfiguring node passwords...")
+        print(f"  Using password: {self.default_password}")
+        
+        # Create a temporary expect script to handle password changes
+        expect_script = f"""#!/usr/bin/expect -f
+set timeout 30
+set password "{self.default_password}"
+
+# Change password on oob-mgmt-server
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+    -p {ssh_info['port']} ubuntu@{ssh_info['hostname']}
+
+expect {{
+    "Current password:" {{
+        send "nvidia\\r"
+        expect "New password:"
+        send "$password\\r"
+        expect "Retype new password:"
+        send "$password\\r"
+        expect eof
+    }}
+    "$ " {{
+        # Already logged in, password already changed
+        send "exit\\r"
+        expect eof
+    }}
+    timeout {{
+        puts "Timeout connecting to oob-mgmt-server"
+        exit 1
+    }}
+}}
+
+puts "✓ OOB server password configured"
+"""
+        
+        try:
+            # Write expect script
+            expect_file = Path('/tmp/air_password_config.exp')
+            expect_file.write_text(expect_script)
+            expect_file.chmod(0o700)
+            
+            # Run expect script
+            result = subprocess.run(
+                ['expect', str(expect_file)],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if result.returncode == 0:
+                print("  ✓ OOB server password configured")
+            else:
+                print(f"  ⚠ Password configuration had issues (may already be set)")
+                print(f"    {result.stdout}")
+            
+            # Clean up
+            expect_file.unlink(missing_ok=True)
+            
+            return True
+            
+        except FileNotFoundError:
+            print("  ⚠ 'expect' not found. Install with: sudo apt install expect")
+            print("  ⚠ Passwords not configured. Use default 'nvidia' and change manually.")
+            return False
+        except Exception as e:
+            print(f"  ⚠ Error configuring passwords: {e}")
+            return False
+    
+    def create_ssh_config(self, ssh_info, simulation_name):
+        """
+        Create .ssh/config file for easy SSH access to simulation nodes
+        
+        Args:
+            ssh_info: dict with 'hostname' and 'port' from get_ssh_service_info()
+            simulation_name: Name of the simulation for config file naming
+        """
+        if not ssh_info or not ssh_info.get('hostname') or not ssh_info.get('port'):
+            print("  ⚠ SSH service info not available yet. Config file will not be created.")
+            print("  ⚠ You can manually add SSH service in Air UI once simulation is fully loaded.")
+            return None
+        
+        print("\nCreating SSH configuration...")
+        
+        # Create .ssh directory in project
+        project_ssh_dir = Path(__file__).parent / '.ssh'
+        project_ssh_dir.mkdir(mode=0o700, exist_ok=True)
+        
+        # Use simulation name for config file
+        config_filename = simulation_name.replace(' ', '-')
+        
+        # Create config content
+        config_content = f"""# NVIDIA Air Simulation SSH Configuration
+# Simulation: {simulation_name}
+# Simulation ID: {self.simulation_id}
+# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
+
+Host air-oob
+  HostName {ssh_info['hostname']}
+  Port {ssh_info['port']}
+  User ubuntu
+  PreferredAuthentications publickey
+  IdentityFile ~/.ssh/id_rsa
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+
+Host air-{self.bcm_node_name}
+  HostName {self.bcm_node_name}
+  User root
+  ProxyJump air-oob
+  PreferredAuthentications publickey,password
+  IdentityFile ~/.ssh/id_rsa
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  # Password: {self.default_password}
+
+# Additional nodes (add as needed):
+# Host air-compute0
+#   HostName compute0
+#   User root
+#   ProxyJump air-oob
+#   PreferredAuthentications publickey,password
+#   IdentityFile ~/.ssh/id_rsa
+#   StrictHostKeyChecking no
+#   UserKnownHostsFile /dev/null
+"""
+        
+        # Write config file
+        config_file = project_ssh_dir / config_filename
+        config_file.write_text(config_content)
+        config_file.chmod(0o600)
+        
+        print(f"  ✓ SSH config created: {config_file}")
+        print(f"\n  To access nodes:")
+        print(f"    ssh -F {config_file} air-oob                     # OOB management server")
+        print(f"    ssh -F {config_file} air-{self.bcm_node_name}   # BCM head node")
+        print(f"\n  Connection details:")
+        print(f"    Worker: {ssh_info['hostname']}:{ssh_info['port']}")
+        print(f"    Password: {self.default_password}")
+        
+        return config_file
     
     def upload_ztp_script(self):
         """Upload ZTP script to the simulation for Cumulus switches"""
@@ -449,25 +779,28 @@ class AirBCMDeployer:
             except Exception as e:
                 print(f"  Warning: Error uploading ZTP for {switch}: {e}")
     
-    def execute_ansible_playbook(self, bcm_version, collection_name):
+    def execute_ansible_playbook(self, bcm_version, collection_name, ssh_config_file):
         """
         Execute Ansible playbook to install BCM
         
         Args:
             bcm_version: BCM version string (10.x or 11.x)
             collection_name: Ansible Galaxy collection name
+            ssh_config_file: Path to SSH config file for ProxyJump access
         """
         print("\n" + "="*60)
         print(f"Installing BCM {bcm_version} via Ansible")
         print("="*60)
         
-        # Create temporary inventory file
+        # Create temporary inventory file using detected BCM node name
+        # Use the SSH config file alias for connection
         inventory_content = f"""[bcm_headnode]
-bcm-headnode0 ansible_host=192.168.200.254 ansible_user=root ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+air-{self.bcm_node_name} ansible_user=root ansible_ssh_common_args='-F {ssh_config_file} -o StrictHostKeyChecking=no' ansible_password={self.default_password}
 
 [all:vars]
 bcm_version={bcm_version}
 bcm_collection={collection_name}
+ansible_python_interpreter=/usr/bin/python3
 """
         
         inventory_file = Path('/tmp/bcm_inventory.ini')
@@ -475,6 +808,8 @@ bcm_collection={collection_name}
             f.write(inventory_content)
         
         print(f"\n✓ Inventory file created")
+        print(f"  Using SSH config: {ssh_config_file}")
+        print(f"  Target host: air-{self.bcm_node_name}")
         print(f"Running Ansible playbook (this may take 10-15 minutes)...\n")
         
         # Run ansible-playbook command
@@ -510,9 +845,9 @@ bcm_collection={collection_name}
         print(f"\nSimulation ID: {self.simulation_id}")
         print(f"\nTo access BCM:")
         print(f"  1. Connect to the simulation via NVIDIA Air web interface")
-        print(f"  2. SSH to bcm-headnode0 (192.168.200.254)")
+        print(f"  2. SSH to {self.bcm_node_name} (192.168.200.254)")
         print(f"     Username: root")
-        print(f"     Password: 3tango")
+        print(f"     Password: {self.default_password}")
         print(f"\nNext Steps:")
         print(f"  1. Disable DHCP on oob-mgmt-server:")
         print(f"     sudo systemctl disable isc-dhcp-server")
@@ -522,7 +857,7 @@ bcm_collection={collection_name}
         print(f"     network; use internalnet; set gateway 192.168.200.1; commit")
         print(f"  3. Add switches and compute nodes to BCM (see README.md)")
         print(f"\nFor BCM GUI access:")
-        print(f"  Add a service in Air to expose TCP 8081 on bcm-headnode0")
+        print(f"  Add a service in Air to expose TCP 8081 on {self.bcm_node_name}")
         print(f"  Access at: https://<worker_url>:<port>/userportal")
         print("\n" + "="*60 + "\n")
 
@@ -609,6 +944,9 @@ Examples:
         # Prompt for BCM version
         bcm_version, collection_name = deployer.prompt_bcm_version()
         
+        # Prompt for default password
+        default_password = deployer.prompt_default_password()
+        
         # Prompt for simulation name (or use command-line arg if provided)
         if args.name:
             simulation_name = args.name
@@ -624,21 +962,47 @@ Examples:
         
         deployer.create_simulation(dot_file, simulation_name)
         
-        # Enable SSH service for direct access
-        deployer.enable_ssh_service()
-        
         # Start the simulation
         deployer.start_simulation()
+        
+        # Wait for simulation to be fully loaded (required before enabling SSH)
+        if not deployer.wait_for_simulation_loaded(timeout=300):
+            print("\n✗ Error: Simulation did not load in time")
+            return 1
+        
+        # Now that simulation is loaded, enable SSH service
+        deployer.enable_ssh_service()
         
         # Upload ZTP script
         deployer.upload_ztp_script()
         
-        # Wait for BCM node to be ready
-        bcm_node = deployer.wait_for_node_ready('bcm-headnode0', timeout=900)
+        # Wait for BCM node to be ready (using detected node name)
+        bcm_node = deployer.wait_for_node_ready(deployer.bcm_node_name, timeout=900)
+        
+        # Get SSH service info and create config file
+        print("\n" + "="*60)
+        print("Configuring SSH Access")
+        print("="*60)
+        ssh_info = deployer.get_ssh_service_info()
+        
+        if not ssh_info:
+            print("\n✗ Error: SSH service not available")
+            print("   Please enable SSH in Air UI: Services tab > Enable SSH")
+            print("   Then run with --skip-ansible to skip to this point")
+            return 1
+        
+        ssh_config_file = deployer.create_ssh_config(ssh_info, simulation_name)
+        
+        if not ssh_config_file:
+            print("\n✗ Error: Could not create SSH config")
+            return 1
+        
+        # Configure passwords on nodes
+        deployer.configure_node_passwords(ssh_info)
         
         if not args.skip_ansible:
             # Execute Ansible playbook
-            deployer.execute_ansible_playbook(bcm_version, collection_name)
+            deployer.execute_ansible_playbook(bcm_version, collection_name, ssh_config_file)
         else:
             print("\n--skip-ansible specified, skipping BCM installation")
         

@@ -1,0 +1,17 @@
+graph "simple-bcm-lab" {
+  // BCM Head Node - will be auto-detected by script
+  "bcm-headnode" [memory="4096" os="generic/ubuntu2404" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
+  
+  // Compute Nodes for PXE booting
+  "compute01" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="50" mgmt_ip="192.168.200.101"]
+  "compute02" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="50" mgmt_ip="192.168.200.102"]
+  
+  // Simple leaf switch for connectivity
+  "leaf01" [function="leaf" memory="4096" os="cumulus-vx-5.14.0" cpu="3" mgmt_ip="192.168.200.21"]
+  
+  // Data plane connections (eth0 is reserved for OOB)
+  "bcm-headnode":"eth1" -- "leaf01":"swp1"
+  "compute01":"eth1" -- "leaf01":"swp2"
+  "compute02":"eth1" -- "leaf01":"swp3"
+}
+
