@@ -1048,7 +1048,7 @@ puts "✓ OOB server password configured"
 Host air-{self.bcm_node_name}
   HostName {ssh_info['hostname']}
   Port {ssh_info['port']}
-  User root
+  User ubuntu
   PreferredAuthentications publickey,password
   IdentityFile {self.ssh_private_key}
   StrictHostKeyChecking no
@@ -1058,7 +1058,7 @@ Host air-{self.bcm_node_name}
 Host bcm
   HostName {ssh_info['hostname']}
   Port {ssh_info['port']}
-  User root
+  User ubuntu
   PreferredAuthentications publickey,password
   IdentityFile {self.ssh_private_key}
   StrictHostKeyChecking no
@@ -1128,9 +1128,9 @@ Host bcm
         print("="*60)
         
         # Create temporary inventory file using detected BCM node name
-        # Use the SSH config file alias for connection
+        # Use ubuntu user with become for sudo (more reliable than root SSH)
         inventory_content = f"""[bcm_headnode]
-air-{self.bcm_node_name} ansible_user=root ansible_ssh_common_args='-F {ssh_config_file} -o StrictHostKeyChecking=no' ansible_password={self.default_password}
+air-{self.bcm_node_name} ansible_user=ubuntu ansible_ssh_common_args='-F {ssh_config_file} -o StrictHostKeyChecking=no' ansible_password={self.default_password} ansible_become=yes ansible_become_method=sudo ansible_become_password={self.default_password}
 
 [all:vars]
 bcm_version={bcm_version}
