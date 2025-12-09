@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='ISO-8859-1'?>
+<diskSetup xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance'>
+  <device>
+    <blockdev>/dev/vda</blockdev>
+    <blockdev>/dev/sda</blockdev>
+    <partition id='a2'>
+      <size>max</size>
+      <type>linux</type>
+      <filesystem>xfs</filesystem>
+      <mountPoint>/</mountPoint>
+      <mountOptions>defaults,noatime,nodiratime</mountOptions>
+    </partition>
+  </device>
+</diskSetup>
