@@ -535,27 +535,48 @@ class AirBCMDeployer:
         return False
     
     def enable_ssh_service(self):
-        """Enable SSH service for the simulation to allow direct SSH access"""
+        """
+        Enable SSH service for the simulation using the Air SDK.
+        Creates an SSH service on oob-mgmt-server:eth0 port 22.
+        
+        Returns:
+            Service object if successful, None otherwise
+        """
         print("\nEnabling SSH service for simulation...")
         
         try:
-            # Get simulation details to enable services
-            response = requests.patch(
-                f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/",
-                headers=self.headers,
-                json={
-                    'ssh_enabled': True
-                },
-                timeout=30
+            from air_sdk import AirApi
+            
+            # Connect to Air SDK
+            air = AirApi(
+                username=self.username,
+                password=self.api_token,
+                api_url=self.api_base_url
             )
             
-            if response.status_code in [200, 201]:
-                print("  ✓ SSH service enabled")
-            else:
-                print(f"  ✗ Failed to enable SSH: {response.status_code}")
-                print(f"  Response: {response.text}")
+            # Get the simulation object
+            sim = air.simulations.get(self.simulation_id)
+            
+            # Create SSH service on oob-mgmt-server:eth0
+            # This exposes port 22 via Air's worker nodes
+            service = sim.create_service(
+                name='ssh',
+                interface='oob-mgmt-server:eth0',
+                dest_port=22,
+                service_type='ssh'
+            )
+            
+            print(f"  ✓ SSH service created: {service.id}")
+            print(f"    Host: {getattr(service, 'host', 'N/A')}")
+            print(f"    Port: {getattr(service, 'src_port', 'N/A')}")
+            
+            return service
+            
         except Exception as e:
-            print(f"  Warning: Error enabling SSH: {e}")
+            print(f"  ✗ Failed to enable SSH service: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def get_ssh_service_info(self):
         """
@@ -566,9 +587,11 @@ class AirBCMDeployer:
         """
         try:
             # Use v1 API which has complete service information including src_port (external port)
+            # Filter by simulation ID to only get services for this simulation
             response = requests.get(
                 f"{self.api_base_url}/api/v1/service/",
                 headers=self.headers,
+                params={'simulation': self.simulation_id},
                 timeout=30
             )
             
@@ -672,12 +695,20 @@ class AirBCMDeployer:
             sim = air.simulations.get(self.simulation_id)
             nodes = air.simulation_nodes.list(simulation=self.simulation_id)
             
-            # Apply cloud-init to Ubuntu/Debian based nodes
+            # Apply cloud-init to user-defined Ubuntu/Debian nodes
+            # Skip Air-managed nodes (oob-mgmt-*) as they use Air's own images
             configured_count = 0
+            skipped_air_managed = []
+            
             for node in nodes:
                 node_name = node.name
                 
-                # Skip switches and PXE nodes (they don't support cloud-init)
+                # Skip Air-managed OOB nodes (they don't honor user cloud-init)
+                if node_name.startswith('oob-mgmt'):
+                    skipped_air_managed.append(node_name)
+                    continue
+                
+                # Skip switches (they don't support cloud-init)
                 if any(skip in node_name.lower() for skip in ['leaf', 'spine', 'switch']):
                     continue
                 
@@ -692,11 +723,17 @@ class AirBCMDeployer:
                 print(f"  Applying cloud-init to {node_name}...")
                 
                 try:
-                    node.set_cloud_init_assignment(user_data=userdata)
+                    # SDK expects a dictionary with 'user_data' key, not keyword args
+                    node.set_cloud_init_assignment({'user_data': userdata})
                     print(f"    ✓ Cloud-init assigned to {node_name}")
                     configured_count += 1
                 except Exception as e:
                     print(f"    ⚠ Could not assign cloud-init to {node_name}: {e}")
+            
+            if skipped_air_managed:
+                print(f"\n  ℹ Skipped Air-managed nodes (use default 'ubuntu'/'nvidia' credentials):")
+                for name in skipped_air_managed:
+                    print(f"    - {name}")
             
             # Clean up temp file
             temp_cloudinit.unlink(missing_ok=True)
