@@ -2,32 +2,43 @@
 
 # Automated BCM Deployment on NVIDIA Air
 
-This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images and Ansible Galaxy playbooks. No custom image creation or manual configuration required!
+This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
 
 ## Overview
 
 This solution automates the complete BCM deployment process:
 - Creates NVIDIA Air simulation from topology definition
-- Deploys BCM 10.x or 11.x (user choice) via Ansible
+- Uploads your BCM ISO to the head node via rsync
+- Installs BCM 10.x or 11.x using official Ansible Galaxy collections
 - Configures network interfaces and storage automatically
-- Sets up basic BCM configuration (DHCP gateway)
+- Sets up basic BCM configuration (passwords, DNS, TFTP)
 
 **Key Benefits:**
 - No custom image creation or upload required
 - Uses stock Ubuntu 24.04 images available in Air
 - Choose BCM 10.x or 11.x at deployment time
 - Fully automated via NVIDIA Air APIs
-- Complete deployment in ~15-20 minutes
+- Reliable ISO upload with rsync (resume support)
+- Complete deployment in ~45-60 minutes (mostly unattended)
+
+**External Dependencies:**
+- [bcm-ansible-installer](https://github.com/berkink-nvidia-com/bcm-ansible-installer) - GitHub repo cloned during installation
+- [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm100/) - Ansible Galaxy collection for BCM 10.x
+- [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm110/) - Ansible Galaxy collection for BCM 11.x
 
 ## Quick Start
 
 ### Prerequisites
 
-1. NVIDIA Air account with API access
+1. **NVIDIA Air account** with API access
    - External site: [air.nvidia.com](https://air.nvidia.com) - publicly accessible
    - Internal site (NVIDIA employees): [air-inside.nvidia.com](https://air-inside.nvidia.com) - **requires NVIDIA VPN or internal network**
-2. Python 3.8+ installed locally
-3. NVIDIA Air API token (generate from your Air account settings)
+2. **Python 3.8+** installed locally
+3. **NVIDIA Air API token** (generate from your Air account settings)
+4. **BCM ISO file** (~5GB) - Download from [Bright Computing Customer Portal](https://customer.brightcomputing.com/download-iso)
+   - Requires your BCM product key
+   - Download the Ubuntu 24.04 version matching your desired BCM version (10.x or 11.x)
+5. **BCM Product Key** - Your license key for BCM installation
 
 ### Installation
 
@@ -81,6 +92,8 @@ cp env.example .env
 #   AIR_API_TOKEN - Your API token from Air
 #   AIR_USERNAME - Your Air account email
 #   AIR_API_URL - Air site URL (air.nvidia.com or air-inside.nvidia.com)
+#   BCM_PRODUCT_KEY - Your BCM license key
+#   BCM_ADMIN_EMAIL - Admin email for BCM
 ```
 
 **Example `.env` file:**
@@ -88,7 +101,24 @@ cp env.example .env
 AIR_API_TOKEN=your_actual_token_here
 AIR_USERNAME=your_email@nvidia.com
 AIR_API_URL=https://air.nvidia.com  # or https://air-inside.nvidia.com
+BCM_PRODUCT_KEY=123456-789012-345678-901234-567890
+BCM_ADMIN_EMAIL=your_email@nvidia.com
 ```
+
+8. Place your BCM ISO file:
+```bash
+# Create the .iso directory
+mkdir -p .iso
+
+# Copy or move your downloaded BCM ISO
+# For BCM 10.x:
+cp ~/Downloads/bcm-10.0-ubuntu2404.iso .iso/
+
+# For BCM 11.x:
+cp ~/Downloads/bcm-11.0-ubuntu2404.iso .iso/
+```
+
+The script will automatically detect the ISO matching your selected BCM version.
 
 8. **(Optional)** Verify your setup:
 ```bash
@@ -118,12 +148,17 @@ python deploy_bcm_air.py --internal
 
 The script will:
 1. Prompt you to choose BCM version (10.x or 11.x)
-2. Create the Air simulation with all nodes and network topology
-3. Wait for nodes to boot and become ready
-4. Install BCM via Ansible (takes 10-15 minutes)
-5. Configure basic network settings
+2. Prompt for password (default: `Nvidia1234!`) or your custom password
+3. Create the Air simulation with all nodes and network topology
+4. Wait for simulation to load and nodes to boot
+5. Upload your BCM ISO to the head node via rsync (~10-20 min for 5GB)
+6. Execute BCM installation script on head node (~30-45 min)
+   - Clones [bcm-ansible-installer](https://github.com/berkink-nvidia-com/bcm-ansible-installer)
+   - Installs Ansible Galaxy collection
+   - Runs official BCM installation playbook
+7. Configure passwords, DNS, and TFTP
 
-**That's it!** Your BCM environment will be ready to use.
+**That's it!** You can work on other things while it installs - the script runs unattended after ISO upload.
 
 ### Access Your BCM Environment
 
@@ -223,12 +258,24 @@ Network: `192.168.200.0/24` (internal OOB management network)
 - `deploy_bcm_air.py` - Main deployment automation script
 - `env.example` - Environment variable template
 
+**Scripts:**
+- `scripts/bcm_install.sh` - BCM installation script (runs on head node)
+  - Clones bcm-ansible-installer from GitHub
+  - Generates cluster credentials and settings
+  - Runs official BCM Ansible playbook locally
+
 **Ansible:**
-- `ansible/install_bcm.yml` - Ansible playbook for BCM installation
+- `ansible/install_bcm.yml` - Legacy Ansible playbook (kept for reference)
 - `ansible/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
 
 **Topologies:**
-- `topologies/test-bcm.dot` - Network topology definition
+- `topologies/test-bcm.dot` - Network topology definition (DOT format)
+- `topologies/test-bcm.json` - Network topology definition (JSON format)
+
+**ISO Directory:**
+- `.iso/` - Place your BCM ISO files here (gitignored)
+  - `bcm-10.0-ubuntu2404.iso` - BCM 10.x ISO
+  - `bcm-11.0-ubuntu2404.iso` - BCM 11.x ISO
 
 **Tools:**
 - `tools/check_setup.py` - Environment setup verification
@@ -705,12 +752,19 @@ bcm-in-nvidia-air/
 ├── cloud-init-password.yaml.example  # Cloud-init template (copy and add your SSH key)
 ├── cloud-init-password.yaml       # Your config with SSH key (gitignored)
 │
+├── .iso/                          # BCM ISO files (gitignored)
+│   └── bcm-10.0-ubuntu2404.iso    # Place your BCM ISO here
+│
+├── scripts/                       # Installation scripts
+│   └── bcm_install.sh             # BCM installation script (runs on head node)
+│
 ├── ansible/                       # Ansible playbooks and scripts
-│   ├── install_bcm.yml            # Ansible playbook for BCM installation
+│   ├── install_bcm.yml            # Legacy playbook (kept for reference)
 │   └── cumulus-ztp.sh             # Cumulus switch ZTP script
 │
 ├── topologies/                    # Network topology templates
-│   ├── test-bcm.dot               # Default BCM lab topology
+│   ├── test-bcm.dot               # Default BCM lab topology (DOT format)
+│   ├── test-bcm.json              # Default BCM lab topology (JSON format)
 │   └── simple-bcm.dot             # Simplified topology example
 │
 ├── tools/                         # Testing and troubleshooting utilities
@@ -724,6 +778,33 @@ bcm-in-nvidia-air/
 ├── requirements.txt               # Python dependencies (pip fallback)
 └── ansible-requirements.yml       # Ansible Galaxy collections
 ```
+
+## How It Works
+
+The deployment uses a two-phase approach:
+
+**Phase 1: Simulation Setup (your machine)**
+1. Creates NVIDIA Air simulation via API
+2. Applies cloud-init for password/SSH key configuration
+3. Waits for simulation to load
+4. Uploads BCM ISO via rsync (reliable, resumable)
+5. Uploads installation script with your credentials
+
+**Phase 2: BCM Installation (on head node)**
+1. Mounts ISO as installation source
+2. Clones [bcm-ansible-installer](https://github.com/berkink-nvidia-com/bcm-ansible-installer)
+3. Installs Ansible Galaxy collection (`brightcomputing.installer100` or `installer110`)
+4. Generates cluster credentials and network settings
+5. Runs official BCM Ansible playbook locally
+6. Configures DNS, TFTP, and passwords
+
+**GitHub Dependency:**
+The installation script clones `https://github.com/berkink-nvidia-com/bcm-ansible-installer.git` which provides:
+- Wrapper playbook for BCM installation
+- Inventory templates for head node setup
+- Post-installation DNS configuration tasks
+
+This repo in turn uses the official Bright Computing Ansible Galaxy collections.
 
 ---
 
