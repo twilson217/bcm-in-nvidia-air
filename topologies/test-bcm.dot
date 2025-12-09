@@ -1,25 +1,16 @@
 graph "bcm-air-poc" {
-  # Our own OOB infrastructure (not Air-managed)
-  "oob-mgmt-server" [function="oob-server" os="generic/ubuntu2404" cpu="2" memory="2048"]
+  "oob-mgmt-server" [function="oob-server" cpu="2" memory="2048"]
   "oob-mgmt-switch" [function="oob-switch" mgmt_ip="192.168.200.251"]
-  
-  # Fake node for outbound connectivity
   "fake0" [function="fake" os="generic/ubuntu2204"]
   
-  # BCM head node
   "bcm-01" [memory="8192" os="generic/ubuntu2404" cpu="4" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
-  
-  # Compute nodes (PXE boot)
   "compute0" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.14"]
   "compute1" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.15"]
   "compute2" [function="server" memory="2048" os="pxe" cpu="2" boot="network" cpu_mode="host-model" storage="20" mgmt_ip="192.168.200.16"]
-  
-  # Other nodes
   "ubuntu0" [function="server" memory="1024" os="generic/ubuntu2204" cpu="1" mgmt_ip="192.168.200.10"]
   "leaf01" [function="leaf" memory="4096" os="cumulus-vx-5.15.0" cpu="3" mgmt_ip="192.168.200.12"]
   "leaf02" [function="leaf" memory="4096" os="cumulus-vx-5.15.0" cpu="3" mgmt_ip="192.168.200.13"]
 
-  # OOB management connections (eth0 to oob-mgmt-switch)
   "oob-mgmt-server":"eth1" -- "oob-mgmt-switch":"swp1"
   "bcm-01":"eth0" -- "oob-mgmt-switch":"swp2"
   "ubuntu0":"eth0" -- "oob-mgmt-switch":"swp3"
@@ -29,10 +20,8 @@ graph "bcm-air-poc" {
   "compute1":"eth0" -- "oob-mgmt-switch":"swp7"
   "compute2":"eth0" -- "oob-mgmt-switch":"swp8"
   
-  # Outbound connection for BCM SSH access
   "bcm-01":"eth1" -- "fake0":"outbound"
   
-  # Data plane connections
   "leaf01":"swp51" -- "leaf02":"swp51"
   "ubuntu0":"eth1" -- "leaf01":"swp1"
   "ubuntu0":"eth2" -- "leaf02":"swp1"
