@@ -11,6 +11,9 @@ cloud-init-password.yaml
 # BCM setup config with product key (use .example template)
 ansible/cm-bright-setup.conf
 
+# BCM ISO files (large, user downloads their own)
+.iso/
+
 # Generated SSH configs (contain simulation-specific details)
 .ssh/
 

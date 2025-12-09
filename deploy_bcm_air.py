@@ -1155,48 +1155,192 @@ Host bcm
             except Exception as e:
                 print(f"  Warning: Error uploading ZTP for {switch}: {e}")
     
-    def execute_ansible_playbook(self, bcm_version, collection_name, ssh_config_file):
+    def find_bcm_iso(self, bcm_version):
         """
-        Execute Ansible playbook to install BCM
+        Find BCM ISO file in ./iso/ directory
         
         Args:
             bcm_version: BCM version string (10.x or 11.x)
-            collection_name: Ansible Galaxy collection name
-            ssh_config_file: Path to SSH config file for ProxyJump access
+            
+        Returns:
+            Path to ISO file, or None if not found
         """
-        print("\n" + "="*60)
-        print(f"Installing BCM {bcm_version} via Ansible")
-        print("="*60)
+        iso_dir = Path(__file__).parent / '.iso'
         
-        # Create temporary inventory file using detected BCM node name
-        # Use ubuntu user with become for sudo (more reliable than root SSH)
-        inventory_content = f"""[bcm_headnode]
-air-{self.bcm_node_name} ansible_user=ubuntu ansible_ssh_common_args='-F {ssh_config_file} -o StrictHostKeyChecking=no' ansible_password={self.default_password} ansible_become=yes ansible_become_method=sudo ansible_become_password={self.default_password}
-
-[all:vars]
-bcm_version={bcm_version}
-bcm_collection={collection_name}
-ansible_python_interpreter=/usr/bin/python3
-"""
+        if not iso_dir.exists():
+            print(f"\n⚠ ISO directory not found: {iso_dir}")
+            print(f"  Please create ./.iso/ and place your BCM ISO there")
+            return None
         
-        inventory_file = Path('/tmp/bcm_inventory.ini')
-        with open(inventory_file, 'w') as f:
-            f.write(inventory_content)
+        # Extract major version number (10 or 11)
+        major_version = bcm_version.split('.')[0]
         
-        print(f"\n✓ Inventory file created")
-        print(f"  Using SSH config: {ssh_config_file}")
-        print(f"  Target host: air-{self.bcm_node_name}")
-        print(f"Running Ansible playbook (this may take 10-15 minutes)...\n")
+        # Look for ISO files matching the version
+        patterns = [
+            f'bcm-{major_version}*.iso',
+            f'BCM-{major_version}*.iso',
+            f'*bcm*{major_version}*.iso',
+        ]
         
-        # Run ansible-playbook command
-        playbook_path = Path(__file__).parent / 'ansible' / 'install_bcm.yml'
+        for pattern in patterns:
+            matches = list(iso_dir.glob(pattern))
+            if matches:
+                # Return the first match (or most recent if multiple)
+                iso_file = sorted(matches, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+                print(f"\n✓ Found BCM ISO: {iso_file.name}")
+                print(f"  Size: {iso_file.stat().st_size / (1024**3):.2f} GB")
+                return iso_file
+        
+        # If no version-specific ISO, look for any ISO
+        all_isos = list(iso_dir.glob('*.iso'))
+        if all_isos:
+            iso_file = sorted(all_isos, key=lambda p: p.stat().st_mtime, reverse=True)[0]
+            print(f"\n⚠ Using ISO (version not verified): {iso_file.name}")
+            return iso_file
+        
+        print(f"\n✗ No BCM ISO found in {iso_dir}")
+        print(f"  Download your BCM ISO from: https://customer.brightcomputing.com/download-iso")
+        print(f"  Create directory: mkdir .iso")
+        print(f"  Place the ISO file in: ./.iso/")
+        return None
+    
+    def upload_iso_to_bcm(self, iso_path, ssh_config_file):
+        """
+        Upload BCM ISO to the head node via rsync
+        
+        Args:
+            iso_path: Local path to ISO file
+            ssh_config_file: Path to SSH config file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        print(f"\n📦 Uploading BCM ISO to head node...")
+        print(f"  Source: {iso_path}")
+        print(f"  This may take 10-20 minutes depending on connection speed...")
+        
+        # Use rsync for reliable large file transfer
+        ssh_cmd = f"ssh -F {ssh_config_file} -o StrictHostKeyChecking=no"
+        remote_path = f"air-{self.bcm_node_name}:/root/bcm.iso"
         
         cmd = [
-            'ansible-playbook',
-            '-i', str(inventory_file),
-            str(playbook_path),
-            '-e', f'bcm_version={bcm_version}',
-            '-e', f'bcm_collection={collection_name}'
+            'rsync',
+            '-avz',
+            '--progress',
+            '-e', ssh_cmd,
+            str(iso_path),
+            remote_path
+        ]
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=False,
+                text=True
+            )
+            print(f"\n✓ ISO uploaded successfully")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n✗ ISO upload failed: {e}")
+            return False
+        except FileNotFoundError:
+            print(f"\n✗ rsync not found. Please install rsync:")
+            print(f"    sudo apt-get install rsync")
+            return False
+    
+    def upload_install_script(self, bcm_version, ssh_config_file):
+        """
+        Upload and prepare bcm_install.sh on the head node
+        
+        Args:
+            bcm_version: BCM version string (10.x or 11.x)
+            ssh_config_file: Path to SSH config file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        print(f"\n📜 Uploading BCM installation script...")
+        
+        # Read the template script
+        script_template = Path(__file__).parent / 'scripts' / 'bcm_install.sh'
+        if not script_template.exists():
+            print(f"\n✗ Script template not found: {script_template}")
+            return False
+        
+        script_content = script_template.read_text()
+        
+        # Extract major version (10 or 11)
+        major_version = bcm_version.split('.')[0]
+        
+        # Replace placeholders
+        script_content = script_content.replace('{PASSWORD}', self.default_password)
+        script_content = script_content.replace('{PRODUCT_KEY}', self.bcm_product_key)
+        script_content = script_content.replace('{BCM_VERSION}', major_version)
+        script_content = script_content.replace('{ADMIN_EMAIL}', self.bcm_admin_email)
+        
+        # Write to temp file
+        temp_script = Path('/tmp/bcm_install.sh')
+        temp_script.write_text(script_content)
+        temp_script.chmod(0o755)
+        
+        # Upload via scp
+        ssh_cmd = f"-F {ssh_config_file} -o StrictHostKeyChecking=no"
+        remote_path = f"air-{self.bcm_node_name}:/root/bcm_install.sh"
+        
+        cmd = [
+            'scp',
+            '-F', ssh_config_file,
+            '-o', 'StrictHostKeyChecking=no',
+            str(temp_script),
+            remote_path
+        ]
+        
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            print(f"  ✓ Script uploaded")
+            
+            # Make executable on remote
+            ssh_make_exec = [
+                'ssh',
+                '-F', ssh_config_file,
+                '-o', 'StrictHostKeyChecking=no',
+                f'air-{self.bcm_node_name}',
+                'chmod +x /root/bcm_install.sh'
+            ]
+            subprocess.run(ssh_make_exec, check=True, capture_output=True)
+            
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n✗ Script upload failed: {e}")
+            return False
+    
+    def execute_bcm_install(self, ssh_config_file):
+        """
+        Execute BCM installation script on the head node
+        
+        Args:
+            ssh_config_file: Path to SSH config file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        print(f"\n🚀 Starting BCM installation on head node...")
+        print(f"  This will take 30-45 minutes.")
+        print(f"  You can monitor progress in a separate terminal:")
+        print(f"    ssh -F {ssh_config_file} air-{self.bcm_node_name} 'tail -f /root/ansible_bcm_install.log'")
+        print("")
+        
+        # Execute the install script via SSH
+        # Use sudo since we're connecting as ubuntu user
+        cmd = [
+            'ssh',
+            '-F', ssh_config_file,
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'ServerAliveInterval=60',
+            '-o', 'ServerAliveCountMax=30',
+            f'air-{self.bcm_node_name}',
+            'sudo /root/bcm_install.sh'
         ]
         
         try:
@@ -1207,11 +1351,49 @@ ansible_python_interpreter=/usr/bin/python3
                 text=True
             )
             print("\n✓ BCM installation completed successfully!")
+            return True
         except subprocess.CalledProcessError as e:
-            print(f"\n✗ Ansible playbook failed with exit code {e.returncode}")
-            raise
+            print(f"\n✗ BCM installation failed with exit code {e.returncode}")
+            print(f"  Check logs: ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /root/ansible_bcm_install.log'")
+            return False
     
-    def print_summary(self, bcm_version):
+    def install_bcm(self, bcm_version, ssh_config_file):
+        """
+        Main BCM installation method - uploads ISO and runs installation
+        
+        Args:
+            bcm_version: BCM version string (10.x or 11.x)
+            ssh_config_file: Path to SSH config file
+        """
+        print("\n" + "="*60)
+        print(f"Installing BCM {bcm_version}")
+        print("="*60)
+        
+        # Validate product key
+        if not self.bcm_product_key or self.bcm_product_key == 'your_product_key_here':
+            print("\n✗ BCM_PRODUCT_KEY not configured in .env")
+            print("  Please add your BCM license key to .env:")
+            print("    BCM_PRODUCT_KEY=your_key_here")
+            raise ValueError("BCM product key not configured")
+        
+        # Step 1: Find ISO
+        iso_path = self.find_bcm_iso(bcm_version)
+        if not iso_path:
+            raise FileNotFoundError("BCM ISO not found")
+        
+        # Step 2: Upload ISO
+        if not self.upload_iso_to_bcm(iso_path, ssh_config_file):
+            raise RuntimeError("Failed to upload BCM ISO")
+        
+        # Step 3: Upload install script
+        if not self.upload_install_script(bcm_version, ssh_config_file):
+            raise RuntimeError("Failed to upload installation script")
+        
+        # Step 4: Execute installation
+        if not self.execute_bcm_install(ssh_config_file):
+            raise RuntimeError("BCM installation failed")
+    
+    def print_summary(self, bcm_version, ssh_config_file=None):
         """Print deployment summary and next steps"""
         print("\n" + "="*60)
         print("Deployment Complete!")
@@ -1219,22 +1401,31 @@ ansible_python_interpreter=/usr/bin/python3
         
         print(f"\nBCM {bcm_version} has been deployed on NVIDIA Air")
         print(f"\nSimulation ID: {self.simulation_id}")
-        print(f"\nTo access BCM:")
-        print(f"  1. Connect to the simulation via NVIDIA Air web interface")
-        print(f"  2. SSH to {self.bcm_node_name} (192.168.200.254)")
-        print(f"     Username: root")
-        print(f"     Password: {self.default_password}")
-        print(f"\nNext Steps:")
-        print(f"  1. Disable DHCP on oob-mgmt-server:")
-        print(f"     sudo systemctl disable isc-dhcp-server")
-        print(f"     sudo service isc-dhcp-server stop")
-        print(f"  2. Configure BCM network gateway:")
-        print(f"     cmsh")
-        print(f"     network; use internalnet; set gateway 192.168.200.1; commit")
-        print(f"  3. Add switches and compute nodes to BCM (see README.md)")
-        print(f"\nFor BCM GUI access:")
+        
+        if ssh_config_file:
+            print(f"\nSSH Access:")
+            print(f"  ssh -F {ssh_config_file} air-{self.bcm_node_name}")
+        
+        print(f"\nBCM Access:")
+        print(f"  Hostname: {self.bcm_node_name}")
+        print(f"  Internal IP: 192.168.200.254")
+        print(f"  Username: root")
+        print(f"  Password: {self.default_password}")
+        
+        print(f"\nBCM CLI:")
+        print(f"  cmsh                    # Enter BCM shell")
+        print(f"  device list             # List managed devices")
+        
+        print(f"\nBCM GUI:")
         print(f"  Add a service in Air to expose TCP 8081 on {self.bcm_node_name}")
-        print(f"  Access at: https://<worker_url>:<port>/userportal")
+        print(f"  Access at: https://<worker_url>:<port>/base-view")
+        
+        print(f"\nInstallation Logs:")
+        if ssh_config_file:
+            print(f"  ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /root/ansible_bcm_install.log'")
+        else:
+            print(f"  /root/ansible_bcm_install.log on {self.bcm_node_name}")
+        
         print("\n" + "="*60 + "\n")
 
 
@@ -1386,16 +1577,13 @@ Examples:
             print("\n✓ Passwords configured via cloud-init (set at boot time)")
         
         if not args.skip_ansible:
-            # Ensure BCM config is generated (needs password to be set first)
-            deployer._ensure_bcm_config()
-            
-            # Execute Ansible playbook
-            deployer.execute_ansible_playbook(bcm_version, collection_name, ssh_config_file)
+            # Install BCM via ISO upload and remote script execution
+            deployer.install_bcm(bcm_version, ssh_config_file)
         else:
             print("\n--skip-ansible specified, skipping BCM installation")
         
         # Print summary
-        deployer.print_summary(bcm_version)
+        deployer.print_summary(bcm_version, ssh_config_file)
         
         return 0
         
