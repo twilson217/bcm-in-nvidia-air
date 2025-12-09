@@ -68,6 +68,12 @@ class AirBCMDeployer:
         self.ssh_private_key = os.path.expanduser(self.ssh_private_key)
         self.ssh_public_key = os.path.expanduser(self.ssh_public_key)
         
+        # Validate SSH keys exist
+        self._validate_ssh_keys()
+        
+        # Ensure cloud-init file exists (auto-generate from template if needed)
+        self._ensure_cloudinit_config()
+        
         # Authenticate and get JWT token
         self.jwt_token = self._authenticate()
         
@@ -77,6 +83,52 @@ class AirBCMDeployer:
         }
         self.simulation_id = None
         self.bcm_node_id = None
+    
+    def _validate_ssh_keys(self):
+        """Validate that SSH key files exist"""
+        if not os.path.exists(self.ssh_private_key):
+            print(f"\n⚠ Warning: SSH private key not found: {self.ssh_private_key}")
+            print(f"  SSH connections may fail. Update SSH_PRIVATE_KEY in .env")
+        
+        if not os.path.exists(self.ssh_public_key):
+            print(f"\n✗ Error: SSH public key not found: {self.ssh_public_key}")
+            print(f"\nPlease update SSH_PUBLIC_KEY in .env to point to your public key.")
+            print(f"Common locations:")
+            print(f"  ~/.ssh/id_rsa.pub")
+            print(f"  ~/.ssh/id_ed25519.pub")
+            raise FileNotFoundError(f"SSH public key not found: {self.ssh_public_key}")
+    
+    def _ensure_cloudinit_config(self):
+        """
+        Ensure cloud-init-password.yaml exists.
+        If not, auto-generate it from the template using the user's SSH public key.
+        """
+        cloudinit_file = Path(__file__).parent / 'cloud-init-password.yaml'
+        template_file = Path(__file__).parent / 'cloud-init-password.yaml.example'
+        
+        if cloudinit_file.exists():
+            return  # Already exists
+        
+        if not template_file.exists():
+            print(f"\n✗ Error: Cloud-init template not found: {template_file}")
+            raise FileNotFoundError("cloud-init-password.yaml.example not found")
+        
+        # Read the user's public key
+        try:
+            with open(self.ssh_public_key, 'r') as f:
+                public_key = f.read().strip()
+        except Exception as e:
+            print(f"\n✗ Error reading SSH public key: {e}")
+            raise
+        
+        # Read template and replace placeholder with actual key
+        template_content = template_file.read_text()
+        cloudinit_content = template_content.replace('YOUR_SSH_PUBLIC_KEY_HERE', public_key)
+        
+        # Write the cloud-init file
+        cloudinit_file.write_text(cloudinit_content)
+        print(f"\n✓ Auto-generated cloud-init-password.yaml with your SSH key")
+        print(f"  Public key: {self.ssh_public_key}")
     
     def _authenticate(self):
         """
