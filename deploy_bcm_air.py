@@ -597,14 +597,24 @@ class AirBCMDeployer:
     
     def configure_node_passwords_cloudinit(self):
         """
-        Configure passwords on nodes using cloud-init (preferred method)
+        Configure passwords on nodes using cloud-init via Air SDK (preferred method)
         This sets passwords at boot time, before any SSH attempts
+        
+        Uses the Air SDK UserConfig API to:
+        1. Create a cloud-init user-data script with password configuration
+        2. Assign the script to relevant nodes
         
         Returns:
             True if successful, False otherwise
         """
         print("\nConfiguring node passwords via cloud-init...")
         print(f"  Target password: {self.default_password}")
+        
+        try:
+            from air_sdk import AirApi
+        except ImportError:
+            print("  ⚠ air_sdk not installed. Install with: pip install air-sdk")
+            return False
         
         # Load cloud-init template
         cloudinit_template_path = Path(__file__).parent / 'cloud-init-password.yaml'
@@ -616,57 +626,84 @@ class AirBCMDeployer:
         cloudinit_template = cloudinit_template_path.read_text()
         cloudinit_content = cloudinit_template.replace('{PASSWORD}', self.default_password)
         
+        # Write to temp file for SDK (SDK expects file path or file handle)
+        temp_cloudinit = Path('/tmp/air_cloudinit_password.yaml')
+        temp_cloudinit.write_text(cloudinit_content)
+        
         try:
-            # Get all nodes in simulation
-            response = requests.get(
-                f"{self.api_base_url}/api/v2/simulations/nodes/",
-                headers=self.headers,
-                timeout=30
+            # Initialize Air SDK
+            print("  Connecting to Air SDK...")
+            air = AirApi(
+                username=self.username,
+                password=self.api_token,
+                api_url=self.api_base_url
             )
             
-            if response.status_code != 200:
-                print(f"  ✗ Failed to get nodes: {response.status_code}")
-                return False
+            # Create the cloud-init user-data script
+            print("  Creating cloud-init user-data script...")
+            userdata_name = f"bcm-password-config-{self.simulation_id[:8]}"
             
-            all_nodes = response.json().get('results', [])
-            sim_nodes = [n for n in all_nodes if n.get('simulation') == self.simulation_id]
+            try:
+                # Create new UserConfig for cloud-init
+                userdata = air.user_configs.create(
+                    name=userdata_name,
+                    kind='cloud-init-user-data',
+                    organization=None,  # Personal config
+                    content=str(temp_cloudinit)
+                )
+                print(f"    ✓ Created UserConfig: {userdata.id}")
+            except Exception as e:
+                print(f"    ⚠ Error creating UserConfig: {e}")
+                # Try to get existing one with same name
+                try:
+                    configs = air.user_configs.list()
+                    for cfg in configs:
+                        if cfg.name == userdata_name:
+                            userdata = cfg
+                            print(f"    ℹ Using existing UserConfig: {userdata.id}")
+                            break
+                    else:
+                        raise Exception("Could not create or find UserConfig")
+                except:
+                    return False
             
-            # Apply cloud-init to Ubuntu/Debian based nodes (not Cumulus switches)
+            # Get simulation nodes
+            print("  Getting simulation nodes...")
+            sim = air.simulations.get(self.simulation_id)
+            nodes = air.simulation_nodes.list(simulation=self.simulation_id)
+            
+            # Apply cloud-init to Ubuntu/Debian based nodes
             configured_count = 0
-            for node in sim_nodes:
-                node_name = node.get('name')
-                node_id = node.get('id')
-                node_os = node.get('os', '').lower()
+            for node in nodes:
+                node_name = node.name
                 
-                # Skip switches and PXE nodes
-                if 'cumulus' in node_os or 'pxe' in node_os or 'leaf' in node_name or 'spine' in node_name:
+                # Skip switches and PXE nodes (they don't support cloud-init)
+                if any(skip in node_name.lower() for skip in ['leaf', 'spine', 'switch']):
                     continue
+                
+                # Skip nodes that are likely PXE boot (check OS if available)
+                try:
+                    node_os = getattr(node, 'os', '') or ''
+                    if 'pxe' in node_os.lower() or 'cumulus' in node_os.lower():
+                        continue
+                except:
+                    pass
                 
                 print(f"  Applying cloud-init to {node_name}...")
                 
-                # Try to apply cloud-init user-data
-                # Note: The API might expect a script UUID, but we'll try inline content first
-                patch_data = {
-                    'user_data': cloudinit_content
-                }
-                
-                patch_response = requests.patch(
-                    f"{self.api_base_url}/api/v2/simulations/nodes/{node_id}/cloud-init/",
-                    headers=self.headers,
-                    json=patch_data,
-                    timeout=30
-                )
-                
-                if patch_response.status_code in [200, 201]:
-                    print(f"    ✓ Cloud-init applied to {node_name}")
+                try:
+                    node.set_cloud_init_assignment(user_data=userdata)
+                    print(f"    ✓ Cloud-init assigned to {node_name}")
                     configured_count += 1
-                else:
-                    print(f"    ⚠ Could not apply cloud-init to {node_name}: {patch_response.status_code}")
-                    print(f"      Response: {patch_response.text[:200]}")
+                except Exception as e:
+                    print(f"    ⚠ Could not assign cloud-init to {node_name}: {e}")
+            
+            # Clean up temp file
+            temp_cloudinit.unlink(missing_ok=True)
             
             if configured_count > 0:
                 print(f"\n  ✓ Cloud-init configured on {configured_count} nodes")
-                print(f"  ℹ Note: Nodes must be rebuilt/reset for cloud-init to take effect")
+                print(f"  ℹ Passwords will be set when nodes boot (or rebuild existing nodes)")
                 return True
             else:
                 print(f"\n  ⚠ Could not configure cloud-init on any nodes")
@@ -674,6 +711,8 @@ class AirBCMDeployer:
                 
         except Exception as e:
             print(f"  ✗ Error configuring cloud-init: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def configure_node_passwords(self, ssh_info):
@@ -1043,9 +1082,9 @@ Examples:
         
         deployer.create_simulation(dot_file, simulation_name)
         
-        # Note: Cloud-init configuration via API requires pre-creating script objects
-        # For now, we'll use SSH-based password configuration after boot
-        # TODO: Implement cloud-init script object creation for cleaner password setup
+        # Configure passwords via cloud-init (before starting simulation)
+        # This is the preferred method - passwords set at boot time
+        cloudinit_success = deployer.configure_node_passwords_cloudinit()
         
         # Start the simulation
         deployer.start_simulation()
@@ -1082,8 +1121,12 @@ Examples:
             print("\n✗ Error: Could not create SSH config")
             return 1
         
-        # Configure passwords via SSH (after nodes are booted and accessible)
-        deployer.configure_node_passwords(ssh_info)
+        # If cloud-init didn't work, fallback to SSH-based password configuration
+        if not cloudinit_success:
+            print("\n⚠ Cloud-init configuration failed, using SSH fallback...")
+            deployer.configure_node_passwords(ssh_info)
+        else:
+            print("\n✓ Passwords configured via cloud-init (set at boot time)")
         
         if not args.skip_ansible:
             # Execute Ansible playbook

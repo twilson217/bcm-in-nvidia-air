@@ -5,6 +5,9 @@
 .env
 .env.local
 
+# Cloud-init config with SSH keys (use .example template)
+cloud-init-password.yaml
+
 # Python
 __pycache__/
 *.py[cod]

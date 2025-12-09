@@ -150,20 +150,43 @@ ssh -F .ssh/config air-bcm-01
 ssh -J ubuntu@workerNN.air-inside.nvidia.com:PORT root@bcm-01
 ```
 
-**Automated Password Configuration:**
+**Automated Password & SSH Key Configuration:**
+
 During deployment, you'll be prompted to:
 - Use default password: `Nvidia1234!`
 - Or specify your own custom password
 
-The script automatically configures passwords via SSH using `expect`:
-1. Connects to oob-mgmt-server via SSH
-2. Detects and handles interactive password change prompts
-3. Sets your custom password on the OOB server
-4. Enables password authentication for Ansible
+The script uses **cloud-init** (preferred method) for configuration:
+1. Creates a UserConfig script via Air SDK (`air.user_configs.create()`)
+2. Assigns the cloud-init user-data to all Ubuntu nodes
+3. Passwords AND SSH keys are automatically set during first boot
+4. No interactive prompts or SSH automation needed!
 
-**Requirements:** `expect` must be installed (`sudo apt install expect`)
+**Setup (one-time):**
+```bash
+# Copy the example template
+cp cloud-init-password.yaml.example cloud-init-password.yaml
 
-**Future Enhancement:** Cloud-init support (`cloud-init-password.yaml`) is included for future implementation when Air's script object API is better documented.
+# Edit and add your SSH public key
+# Replace YOUR_SSH_PUBLIC_KEY_HERE with your actual key from:
+#   cat ~/.ssh/id_rsa.pub
+# or
+#   cat ~/.ssh/id_ed25519.pub
+```
+
+**What cloud-init configures:**
+- ✅ Sets password for `root` and `ubuntu` users
+- ✅ Adds your SSH key to `ubuntu` user
+- ✅ Adds your SSH key to `root` user
+- ✅ Enables password auth as fallback
+
+**Fallback:** If cloud-init fails, the script automatically falls back to SSH-based configuration using `expect`.
+
+**Files:**
+- `cloud-init-password.yaml.example` - Template (in version control)
+- `cloud-init-password.yaml` - Your config with SSH key (gitignored)
+
+**Requirements:** `air-sdk` must be installed (`pip install air-sdk`)
 
 **BCM Shell:**
 ```bash
@@ -679,7 +702,8 @@ bcm-in-nvidia-air/
 ├── README.md                      # This file
 ├── env.example                    # Example environment configuration
 ├── .env                           # Your environment config (create from env.example)
-├── cloud-init-password.yaml       # Cloud-init template for password configuration
+├── cloud-init-password.yaml.example  # Cloud-init template (copy and add your SSH key)
+├── cloud-init-password.yaml       # Your config with SSH key (gitignored)
 │
 ├── ansible/                       # Ansible playbooks and scripts
 │   ├── install_bcm.yml            # Ansible playbook for BCM installation
