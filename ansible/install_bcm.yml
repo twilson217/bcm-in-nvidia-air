@@ -20,22 +20,22 @@
           - "Using Ansible collection: {{ bcm_collection }}"
     
     - name: Update system packages
-      yum:
-        name: '*'
-        state: latest
+      apt:
         update_cache: yes
+        upgrade: dist
       tags: ['system-update']
     
     - name: Install required system packages
-      yum:
+      apt:
         name:
           - python3
           - python3-pip
-          - epel-release
           - wget
           - curl
           - vim
           - git
+          - cloud-guest-utils
+          - gdisk
         state: present
     
     - name: Grow root partition to use full disk
@@ -51,9 +51,10 @@
           failed_when: false
           changed_when: growpart_result.rc == 0
         
-        - name: Grow XFS filesystem
-          command: xfs_growfs /
+        - name: Grow ext4 filesystem (Ubuntu)
+          command: resize2fs /dev/vda1
           when: growpart_result.rc == 0
+          failed_when: false
         
         - name: Check new disk size
           command: df -h /
@@ -67,48 +68,33 @@
               - "After: {{ disk_after.stdout_lines[1] }}"
       tags: ['disk-setup']
     
-    - name: Configure network interfaces
+    - name: Configure network interfaces (Ubuntu Netplan)
       block:
-        - name: Configure eth0 (internal network)
+        - name: Create Netplan configuration for BCM
           copy:
-            dest: /etc/sysconfig/network-scripts/ifcfg-eth0
+            dest: /etc/netplan/99-bcm-config.yaml
             content: |
-              TYPE="Ethernet"
-              BOOTPROTO="static"
-              NAME="eth0"
-              DEVICE="eth0"
-              ONBOOT="yes"
-              IPADDR=192.168.200.254
-              NETMASK=255.255.255.0
+              network:
+                version: 2
+                ethernets:
+                  eth1:
+                    addresses:
+                      - 192.168.200.254/24
+                  eth2:
+                    dhcp4: true
             owner: root
             group: root
             mode: '0644'
-          register: eth0_config
+          register: netplan_config
         
-        - name: Configure eth1 (external network)
-          copy:
-            dest: /etc/sysconfig/network-scripts/ifcfg-eth1
-            content: |
-              TYPE="Ethernet"
-              BOOTPROTO="dhcp"
-              NAME="eth1"
-              DEVICE="eth1"
-              ONBOOT="yes"
-            owner: root
-            group: root
-            mode: '0644'
-          register: eth1_config
-        
-        - name: Restart network service if configuration changed
-          systemd:
-            name: NetworkManager
-            state: restarted
-          when: eth0_config.changed or eth1_config.changed
+        - name: Apply Netplan configuration
+          command: netplan apply
+          when: netplan_config.changed
         
         - name: Wait for network to be ready
           wait_for:
             timeout: 10
-          when: eth0_config.changed or eth1_config.changed
+          when: netplan_config.changed
       tags: ['network-config']
     
     - name: Create BCM configuration directory
