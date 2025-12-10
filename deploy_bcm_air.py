@@ -22,10 +22,106 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+class ProgressTracker:
+    """Track deployment progress for resume functionality"""
+    
+    STEPS = [
+        'init',
+        'bcm_version_selected',
+        'password_configured',
+        'simulation_name_set',
+        'simulation_created',
+        'cloudinit_configured',
+        'simulation_started',
+        'simulation_loaded',
+        'ssh_enabled',
+        'ztp_uploaded',
+        'node_ready',
+        'ssh_configured',
+        'bcm_installed',
+        'completed'
+    ]
+    
+    def __init__(self, log_dir=None):
+        self.log_dir = Path(log_dir) if log_dir else Path(__file__).parent / '.logs'
+        self.progress_file = self.log_dir / 'progress.json'
+        self.data = self._load()
+    
+    def _load(self):
+        """Load progress from file"""
+        if self.progress_file.exists():
+            try:
+                with open(self.progress_file, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                return {}
+        return {}
+    
+    def _save(self):
+        """Save progress to file"""
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.progress_file, 'w') as f:
+            json.dump(self.data, f, indent=2, default=str)
+    
+    def get_last_step(self):
+        """Get the last completed step"""
+        return self.data.get('last_step', None)
+    
+    def get_step_index(self, step):
+        """Get index of a step"""
+        try:
+            return self.STEPS.index(step)
+        except ValueError:
+            return -1
+    
+    def is_step_completed(self, step):
+        """Check if a step has been completed"""
+        last_step = self.get_last_step()
+        if not last_step:
+            return False
+        return self.get_step_index(step) <= self.get_step_index(last_step)
+    
+    def complete_step(self, step, **kwargs):
+        """Mark a step as completed and store any associated data"""
+        self.data['last_step'] = step
+        self.data['last_updated'] = datetime.now().isoformat()
+        for key, value in kwargs.items():
+            self.data[key] = value
+        self._save()
+    
+    def get(self, key, default=None):
+        """Get a stored value"""
+        return self.data.get(key, default)
+    
+    def clear(self):
+        """Clear all progress"""
+        self.data = {}
+        if self.progress_file.exists():
+            self.progress_file.unlink()
+    
+    def show_status(self):
+        """Display current progress status"""
+        last_step = self.get_last_step()
+        if not last_step:
+            print("  No previous progress found")
+            return
+        
+        print(f"  Last completed step: {last_step}")
+        print(f"  Last updated: {self.data.get('last_updated', 'unknown')}")
+        
+        if self.data.get('simulation_id'):
+            print(f"  Simulation ID: {self.data.get('simulation_id')}")
+        if self.data.get('simulation_name'):
+            print(f"  Simulation name: {self.data.get('simulation_name')}")
+        if self.data.get('bcm_version'):
+            print(f"  BCM version: {self.data.get('bcm_version')}")
+
+
 class AirBCMDeployer:
     """Automate BCM deployment on NVIDIA Air"""
     
-    def __init__(self, api_base_url="https://air.nvidia.com", api_token=None, username=None):
+    def __init__(self, api_base_url="https://air.nvidia.com", api_token=None, username=None, 
+                 non_interactive=False, progress_tracker=None):
         """
         Initialize the deployer
         
@@ -33,7 +129,11 @@ class AirBCMDeployer:
             api_base_url: NVIDIA Air base URL (without /api/vX)
             api_token: API authentication token
             username: Air account username/email
+            non_interactive: If True, accept defaults for all prompts
+            progress_tracker: ProgressTracker instance for resume functionality
         """
+        self.non_interactive = non_interactive
+        self.progress = progress_tracker or ProgressTracker()
         # Clean up URL - remove trailing slashes and /api/vX
         self.api_base_url = api_base_url.rstrip('/')
         if self.api_base_url.endswith('/api/v2'):
@@ -217,9 +317,14 @@ class AirBCMDeployer:
         print("  2) BCM 11.x (brightcomputing.bcm110)")
         print()
         
+        # Non-interactive mode: default to BCM 10
+        if self.non_interactive:
+            print("  [non-interactive] Using default: BCM 10.x")
+            return '10.x', 'brightcomputing.bcm100'
+        
         while True:
-            choice = input("Enter your choice (1 or 2): ").strip()
-            if choice == '1':
+            choice = input("Enter your choice (1 or 2) [default: 1]: ").strip()
+            if choice == '' or choice == '1':
                 return '10.x', 'brightcomputing.bcm100'
             elif choice == '2':
                 return '11.x', 'brightcomputing.bcm110'
@@ -233,6 +338,13 @@ class AirBCMDeployer:
         print("="*60)
         print("\nSet the default password for all nodes in the simulation.")
         print(f"Default: Nvidia1234!")
+        
+        # Non-interactive mode: use default
+        if self.non_interactive:
+            self.default_password = "Nvidia1234!"
+            print("  [non-interactive] Using default password")
+            return self.default_password
+        
         print("Press Enter to use default, or type a custom password:")
         
         user_input = input("> ").strip()
@@ -453,6 +565,12 @@ class AirBCMDeployer:
         print("Simulation Name")
         print("="*60)
         print(f"\nDefault name: {default_name}")
+        
+        # Non-interactive mode: use default
+        if self.non_interactive:
+            print("  [non-interactive] Using default name")
+            return default_name
+        
         print("Press Enter to use default, or type a custom name:")
         
         user_input = input("> ").strip()
@@ -609,19 +727,20 @@ class AirBCMDeployer:
         
         while time.time() - start_time < timeout:
             try:
+                # Query nodes specifically for this simulation
                 response = requests.get(
-                    f"{self.api_base_url}/api/v2/simulations/nodes/",
+                    f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/",
                     headers=self.headers,
                     timeout=30
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
-                    # API returns paginated response with 'results' key
-                    all_nodes = data.get('results', [])
-                    
-                    # Filter nodes for this simulation only
-                    nodes = [n for n in all_nodes if n.get('simulation') == self.simulation_id]
+                    # API returns paginated response with 'results' key or direct list
+                    if isinstance(data, list):
+                        nodes = data
+                    else:
+                        nodes = data.get('results', [])
                     
                     # On first check, show all node states for debugging
                     if first_check and nodes:
@@ -1444,10 +1563,15 @@ Examples:
   export AIR_API_TOKEN=your_token_here
   python deploy_bcm_air.py --internal
   
-  # Deploy with custom API URL
-  export AIR_API_TOKEN=your_token_here
-  export AIR_API_URL=https://air-inside.nvidia.com
-  python deploy_bcm_air.py
+  # Non-interactive deployment (accept all defaults: BCM 10, Nvidia1234!, auto name)
+  python deploy_bcm_air.py --non-interactive
+  python deploy_bcm_air.py -y
+  
+  # Resume a failed/interrupted deployment
+  python deploy_bcm_air.py --resume
+  
+  # Clear progress and start fresh
+  python deploy_bcm_air.py --clear-progress
   
   # Deploy with custom simulation name (or will prompt)
   python deploy_bcm_air.py --name my-bcm-lab
@@ -1485,6 +1609,21 @@ Examples:
         action='store_true',
         help='Skip Ansible installation (create simulation only)'
     )
+    parser.add_argument(
+        '--non-interactive', '-y',
+        action='store_true',
+        help='Accept defaults for all prompts (BCM 10, Nvidia1234!, auto-generated name)'
+    )
+    parser.add_argument(
+        '--resume',
+        action='store_true',
+        help='Resume from last checkpoint (uses .logs/progress.json)'
+    )
+    parser.add_argument(
+        '--clear-progress',
+        action='store_true',
+        help='Clear saved progress and start fresh'
+    )
     
     args = parser.parse_args()
     
@@ -1497,77 +1636,169 @@ Examples:
         api_base_url = os.getenv('AIR_API_URL', 'https://air.nvidia.com')
     
     try:
+        # Initialize progress tracker
+        progress = ProgressTracker()
+        
+        # Handle --clear-progress
+        if args.clear_progress:
+            progress.clear()
+            print("\n✓ Progress cleared")
+            if not args.resume:
+                # If only clearing, exit
+                return 0
+        
+        # Show resume status if --resume
+        if args.resume:
+            print("\n" + "="*60)
+            print("Resume Mode")
+            print("="*60)
+            progress.show_status()
+            
+            if not progress.get_last_step():
+                print("\n  Starting fresh (no previous progress)")
+        
         # Initialize deployer
         print("\n" + "="*60)
         print("NVIDIA Air BCM Automated Deployment")
         print("="*60)
         print(f"Using API: {api_base_url}")
+        if args.non_interactive:
+            print("Mode: Non-interactive (using defaults)")
+        if args.resume:
+            print("Mode: Resume from checkpoint")
         
         deployer = AirBCMDeployer(
             api_base_url=api_base_url,
             api_token=args.api_token,
-            username=None  # Will load from env
+            username=None,  # Will load from env
+            non_interactive=args.non_interactive,
+            progress_tracker=progress
         )
         
-        # Prompt for BCM version
-        bcm_version, collection_name = deployer.prompt_bcm_version()
+        # Track variables that might be restored from progress
+        bcm_version = None
+        collection_name = None
+        simulation_name = None
+        cloudinit_success = False
+        ssh_config_file = None
         
-        # Prompt for default password
-        default_password = deployer.prompt_default_password()
+        # Step: BCM version selection
+        if args.resume and progress.is_step_completed('bcm_version_selected'):
+            bcm_version = progress.get('bcm_version')
+            collection_name = progress.get('collection_name')
+            print(f"\n  [resume] BCM version: {bcm_version}")
+        else:
+            bcm_version, collection_name = deployer.prompt_bcm_version()
+            progress.complete_step('bcm_version_selected', 
+                                   bcm_version=bcm_version, 
+                                   collection_name=collection_name)
         
-        # Prompt for simulation name (or use command-line arg if provided)
-        if args.name:
+        # Step: Password configuration
+        if args.resume and progress.is_step_completed('password_configured'):
+            deployer.default_password = progress.get('default_password', 'Nvidia1234!')
+            print(f"  [resume] Using saved password")
+        else:
+            deployer.prompt_default_password()
+            progress.complete_step('password_configured', 
+                                   default_password=deployer.default_password)
+        
+        # Step: Simulation name
+        if args.resume and progress.is_step_completed('simulation_name_set'):
+            simulation_name = progress.get('simulation_name')
+            print(f"  [resume] Simulation name: {simulation_name}")
+        elif args.name:
             simulation_name = args.name
             print(f"\nUsing simulation name from command line: {simulation_name}")
+            progress.complete_step('simulation_name_set', simulation_name=simulation_name)
         else:
             simulation_name = deployer.prompt_simulation_name()
+            progress.complete_step('simulation_name_set', simulation_name=simulation_name)
         
-        # Create simulation
-        topology_file = Path(args.topology_file)
-        if not topology_file.exists():
-            print(f"\n✗ Error: Topology file not found: {topology_file}")
-            sys.exit(1)
+        # Step: Create simulation
+        if args.resume and progress.is_step_completed('simulation_created'):
+            deployer.simulation_id = progress.get('simulation_id')
+            deployer.bcm_node_name = progress.get('bcm_node_name', 'bcm-01')
+            print(f"  [resume] Simulation ID: {deployer.simulation_id}")
+        else:
+            topology_file = Path(args.topology_file)
+            if not topology_file.exists():
+                print(f"\n✗ Error: Topology file not found: {topology_file}")
+                sys.exit(1)
+            
+            deployer.create_simulation(topology_file, simulation_name)
+            progress.complete_step('simulation_created', 
+                                   simulation_id=deployer.simulation_id,
+                                   simulation_name=simulation_name,
+                                   bcm_node_name=deployer.bcm_node_name)
         
-        deployer.create_simulation(topology_file, simulation_name)
+        # Step: Configure cloud-init
+        if args.resume and progress.is_step_completed('cloudinit_configured'):
+            cloudinit_success = progress.get('cloudinit_success', False)
+            print(f"  [resume] Cloud-init configured: {cloudinit_success}")
+        else:
+            cloudinit_success = deployer.configure_node_passwords_cloudinit()
+            progress.complete_step('cloudinit_configured', cloudinit_success=cloudinit_success)
         
-        # Configure passwords via cloud-init (before starting simulation)
-        # This is the preferred method - passwords set at boot time
-        cloudinit_success = deployer.configure_node_passwords_cloudinit()
+        # Step: Start simulation
+        if args.resume and progress.is_step_completed('simulation_started'):
+            print(f"  [resume] Simulation already started")
+        else:
+            deployer.start_simulation()
+            progress.complete_step('simulation_started')
         
-        # Start the simulation
-        deployer.start_simulation()
+        # Step: Wait for simulation loaded
+        if args.resume and progress.is_step_completed('simulation_loaded'):
+            print(f"  [resume] Simulation already loaded")
+        else:
+            if not deployer.wait_for_simulation_loaded(timeout=300):
+                print("\n✗ Error: Simulation did not load in time")
+                return 1
+            progress.complete_step('simulation_loaded')
         
-        # Wait for simulation to be fully loaded (required before enabling SSH)
-        if not deployer.wait_for_simulation_loaded(timeout=300):
-            print("\n✗ Error: Simulation did not load in time")
-            return 1
+        # Step: Enable SSH service
+        if args.resume and progress.is_step_completed('ssh_enabled'):
+            print(f"  [resume] SSH service already enabled")
+        else:
+            deployer.enable_ssh_service()
+            progress.complete_step('ssh_enabled')
         
-        # Now that simulation is loaded, enable SSH service
-        deployer.enable_ssh_service()
+        # Step: Upload ZTP script
+        if args.resume and progress.is_step_completed('ztp_uploaded'):
+            print(f"  [resume] ZTP already uploaded")
+        else:
+            deployer.upload_ztp_script()
+            progress.complete_step('ztp_uploaded')
         
-        # Upload ZTP script
-        deployer.upload_ztp_script()
+        # Step: Wait for node ready
+        if args.resume and progress.is_step_completed('node_ready'):
+            print(f"  [resume] Node already ready")
+        else:
+            bcm_node = deployer.wait_for_node_ready(deployer.bcm_node_name, timeout=900)
+            progress.complete_step('node_ready')
         
-        # Wait for BCM node to be ready (using detected node name)
-        bcm_node = deployer.wait_for_node_ready(deployer.bcm_node_name, timeout=900)
-        
-        # Get SSH service info and create config file
+        # Step: Configure SSH access
         print("\n" + "="*60)
         print("Configuring SSH Access")
         print("="*60)
+        
         ssh_info = deployer.get_ssh_service_info()
         
         if not ssh_info:
             print("\n✗ Error: SSH service not available")
             print("   Please enable SSH in Air UI: Services tab > Enable SSH")
-            print("   Then run with --skip-ansible to skip to this point")
+            print("   Then run with --resume to continue")
             return 1
         
-        ssh_config_file = deployer.create_ssh_config(ssh_info, simulation_name)
-        
-        if not ssh_config_file:
-            print("\n✗ Error: Could not create SSH config")
-            return 1
+        if args.resume and progress.is_step_completed('ssh_configured'):
+            ssh_config_file = progress.get('ssh_config_file')
+            print(f"  [resume] SSH config: {ssh_config_file}")
+        else:
+            ssh_config_file = deployer.create_ssh_config(ssh_info, simulation_name)
+            
+            if not ssh_config_file:
+                print("\n✗ Error: Could not create SSH config")
+                return 1
+            progress.complete_step('ssh_configured', ssh_config_file=str(ssh_config_file))
         
         # If cloud-init didn't work, fallback to SSH-based password configuration
         if not cloudinit_success:
@@ -1576,11 +1807,18 @@ Examples:
         else:
             print("\n✓ Passwords configured via cloud-init (set at boot time)")
         
+        # Step: Install BCM
         if not args.skip_ansible:
-            # Install BCM via ISO upload and remote script execution
-            deployer.install_bcm(bcm_version, ssh_config_file)
+            if args.resume and progress.is_step_completed('bcm_installed'):
+                print(f"  [resume] BCM already installed")
+            else:
+                deployer.install_bcm(bcm_version, ssh_config_file)
+                progress.complete_step('bcm_installed')
         else:
             print("\n--skip-ansible specified, skipping BCM installation")
+        
+        # Mark completed
+        progress.complete_step('completed')
         
         # Print summary
         deployer.print_summary(bcm_version, ssh_config_file)

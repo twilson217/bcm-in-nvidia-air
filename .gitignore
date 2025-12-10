@@ -17,6 +17,9 @@ ansible/cm-bright-setup.conf
 # Generated SSH configs (contain simulation-specific details)
 .ssh/
 
+# Progress tracking logs (for --resume feature)
+.logs/
+
 # Python
 __pycache__/
 *.py[cod]
