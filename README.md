@@ -76,7 +76,7 @@ sudo apt install -y expect
 6. Configure your NVIDIA Air credentials:
 ```bash
 # Copy the example environment file
-cp env.example .env
+cp sample-configs/env.example .env
 
 # Edit .env with your actual credentials
 # Required fields:
@@ -193,7 +193,7 @@ The script uses **cloud-init** (preferred method) for configuration:
 **Setup (one-time):**
 ```bash
 # Copy the example template
-cp cloud-init-password.yaml.example cloud-init-password.yaml
+cp sample-configs/cloud-init-password.yaml.example cloud-init-password.yaml
 
 # Edit and add your SSH public key
 # Replace YOUR_SSH_PUBLIC_KEY_HERE with your actual key from:
@@ -211,7 +211,7 @@ cp cloud-init-password.yaml.example cloud-init-password.yaml
 **Fallback:** If cloud-init fails, the script automatically falls back to SSH-based configuration using `expect`.
 
 **Files:**
-- `cloud-init-password.yaml.example` - Template (in version control)
+- `sample-configs/cloud-init-password.yaml.example` - Template (in version control)
 - `cloud-init-password.yaml` - Your config with SSH key (gitignored)
 
 **Requirements:** `air-sdk` must be installed (`pip install air-sdk`)
@@ -249,7 +249,8 @@ Network: `192.168.200.0/24` (internal OOB management network)
 
 **Main Files:**
 - `deploy_bcm_air.py` - Main deployment automation script
-- `env.example` - Environment variable template
+- `sample-configs/env.example` - Environment variable template
+- `sample-configs/cloud-init-password.yaml.example` - Cloud-init template
 
 **Scripts:**
 - `scripts/bcm_install.sh` - BCM installation script (runs on head node)
@@ -723,7 +724,7 @@ python deploy_bcm_air.py --skip-ansible
 
 **Configuration (.env file):**
 
-All configuration is managed through a `.env` file in the project root. Copy `env.example` to `.env` and configure:
+All configuration is managed through a `.env` file in the project root. Copy `sample-configs/env.example` to `.env` and configure:
 
 - `AIR_API_TOKEN` - Your NVIDIA Air API authentication token (required)
 - `AIR_USERNAME` - Your Air account email address (required)
@@ -740,10 +741,12 @@ All configuration is managed through a `.env` file in the project root. Copy `en
 bcm-in-nvidia-air/
 ├── deploy_bcm_air.py              # Main automation script (START HERE!)
 ├── README.md                      # This file
-├── env.example                    # Example environment configuration
-├── .env                           # Your environment config (create from env.example)
-├── cloud-init-password.yaml.example  # Cloud-init template (copy and add your SSH key)
-├── cloud-init-password.yaml       # Your config with SSH key (gitignored)
+├── .env                           # Your environment config (create from sample-configs/env.example)
+├── cloud-init-password.yaml       # Your config with SSH key (auto-generated or copy from sample-configs/)
+│
+├── sample-configs/                # Example configuration templates
+│   ├── env.example                # Example environment configuration
+│   └── cloud-init-password.yaml.example  # Cloud-init template
 │
 ├── .iso/                          # BCM ISO files (gitignored)
 │   └── bcm-10.0-ubuntu2404.iso    # Place your BCM ISO here

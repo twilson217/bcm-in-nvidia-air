@@ -209,7 +209,7 @@ class AirBCMDeployer:
         If not, auto-generate it from the template using the user's SSH public key.
         """
         cloudinit_file = Path(__file__).parent / 'cloud-init-password.yaml'
-        template_file = Path(__file__).parent / 'cloud-init-password.yaml.example'
+        template_file = Path(__file__).parent / 'sample-configs' / 'cloud-init-password.yaml.example'
         
         if cloudinit_file.exists():
             return  # Already exists
@@ -331,7 +331,7 @@ class AirBCMDeployer:
             Path to cloud-init config file
         """
         cloudinit_path = Path(__file__).parent / 'cloud-init-password.yaml'
-        template_path = Path(__file__).parent / 'cloud-init-password.yaml.example'
+        template_path = Path(__file__).parent / 'sample-configs' / 'cloud-init-password.yaml.example'
         
         if cloudinit_path.exists():
             print(f"  ✓ Using existing cloud-init config: {cloudinit_path.name}")
