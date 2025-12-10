@@ -7,13 +7,6 @@ air-sdk>=2.0.0
 # Environment variable management
 python-dotenv>=1.0.0
 
-# HTTP requests (for fallback/testing)
+# HTTP requests
 requests>=2.31.0
-
-# Path handling
-pathlib2>=2.3.7; python_version < '3.4'
-
-# Ansible for remote configuration
-ansible>=2.15.0
-ansible-core>=2.15.0
 

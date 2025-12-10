@@ -68,21 +68,12 @@ export UV_LINK_MODE=copy
 uv pip install -e .
 ```
 
-5. Install system Ansible and expect (required for automation):
+5. Install expect (used for fallback password configuration):
 ```bash
-sudo apt install -y software-properties-common expect
-sudo add-apt-repository --yes --update ppa:ansible/ansible
-sudo apt install -y ansible
+sudo apt install -y expect
 ```
 
-**Note:** `expect` is used for automated password configuration on nodes.
-
-6. Install Ansible collections:
-```bash
-ansible-galaxy collection install -r ansible-requirements.yml
-```
-
-7. Configure your NVIDIA Air credentials:
+6. Configure your NVIDIA Air credentials:
 ```bash
 # Copy the example environment file
 cp env.example .env
@@ -124,7 +115,7 @@ The script will automatically detect the ISO matching your selected BCM version.
 
 8. **(Optional)** Verify your setup:
 ```bash
-python tools/check_setup.py
+python scripts/check_setup.py
 ```
 
 This will check that all prerequisites are met before deployment.
@@ -277,9 +268,12 @@ Network: `192.168.200.0/24` (internal OOB management network)
   - `bcm-11.0-ubuntu2404.iso` - BCM 11.x ISO
 
 **Tools:**
-- `tools/check_setup.py` - Environment setup verification
-- `tools/test_sdk_auth.py` - Test Air SDK authentication
-- `tools/test_direct_auth.py` - Test direct API authentication
+**Testing/Debug Scripts:**
+- `scripts/check_setup.py` - Environment setup verification
+- `scripts/check_sim_state.py` - Debug simulation state
+- `scripts/test_sdk_auth.py` - Test Air SDK authentication
+- `scripts/test_direct_auth.py` - Test direct API authentication
+- `scripts/test_auth.sh` - Shell-based auth test
 
 ## Creating Custom Topology Files
 
@@ -754,9 +748,14 @@ bcm-in-nvidia-air/
 ├── .iso/                          # BCM ISO files (gitignored)
 │   └── bcm-10.0-ubuntu2404.iso    # Place your BCM ISO here
 │
-├── scripts/                       # Installation and automation scripts
+├── scripts/                       # All scripts (installation, ZTP, testing)
 │   ├── bcm_install.sh             # BCM installation script (runs on head node)
-│   └── cumulus-ztp.sh             # Cumulus switch ZTP script
+│   ├── cumulus-ztp.sh             # Cumulus switch ZTP script
+│   ├── check_setup.py             # Setup verification helper
+│   ├── check_sim_state.py         # Debug simulation state
+│   ├── test_sdk_auth.py           # SDK authentication test
+│   ├── test_direct_auth.py        # Direct API authentication test
+│   └── test_auth.sh               # Shell-based auth test
 │
 │
 ├── topologies/                    # Network topology templates
@@ -764,16 +763,9 @@ bcm-in-nvidia-air/
 │   ├── test-bcm.json              # Default BCM lab topology (JSON format)
 │   └── simple-bcm.dot             # Simplified topology example
 │
-├── tools/                         # Testing and troubleshooting utilities
-│   ├── check_setup.py             # Setup verification helper
-│   ├── check_sim_state.py         # Debug tool for simulation state
-│   ├── test_sdk_auth.py           # SDK authentication test
-│   ├── test_direct_auth.py        # Direct API authentication test
-│   └── test_auth.sh               # Shell-based auth test
 │
 ├── pyproject.toml                 # Project metadata and dependencies (uv)
-├── requirements.txt               # Python dependencies (pip fallback)
-└── ansible-requirements.yml       # Ansible Galaxy collections
+└── requirements.txt               # Python dependencies (pip fallback)
 ```
 
 ## How It Works

@@ -6,8 +6,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",
-    "ansible>=2.15.0",
-    "ansible-core>=2.15.0",
     "air-sdk>=2.0.0",
     "python-dotenv>=1.0.0",
 ]
@@ -35,12 +33,7 @@ build-backend = "hatchling.build"
 packages = ["."]
 only-include = [
     "deploy_bcm_air.py",
-    "ansible/install_bcm.yml",
-    "ansible/cumulus-ztp.sh",
-    "cm-bright-setup.conf",
-    "node-disk-setup.xml",
-    "named.conf.global.options.include",
-    "topologies/test-bcm.dot",
-    "ansible-requirements.yml",
+    "scripts/",
+    "topologies/",
 ]
 
