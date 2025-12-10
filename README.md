@@ -105,6 +105,8 @@ BCM_PRODUCT_KEY=123456-789012-345678-901234-567890
 BCM_ADMIN_EMAIL=your_email@nvidia.com
 ```
 
+> **⚠️ License MAC Address:** BCM licenses are bound to the MAC address of the head node's primary interface (eth0). The topology file `topologies/test-bcm.json` sets a static MAC address (`48:b0:2d:00:00:00`) to ensure your license works consistently across simulation rebuilds. If you need to use a different MAC (to match an existing license), update the `mac` field in the topology file.
+
 8. Place your BCM ISO file:
 ```bash
 # Create the .iso directory

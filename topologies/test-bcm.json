@@ -64,7 +64,7 @@
             }
         },
         "links": [
-            [{"interface": "eth0", "node": "bcm-01"}, "outbound"],
+            [{"interface": "eth0", "node": "bcm-01", "mac": "48:b0:2d:00:00:00"}, "outbound"],
             [{"interface": "eth1", "node": "bcm-01"}, {"interface": "swp5", "node": "leaf01"}],
             [{"interface": "eth2", "node": "bcm-01"}, {"interface": "swp5", "node": "leaf02"}],
             [{"interface": "swp51", "node": "leaf01"}, {"interface": "swp51", "node": "leaf02"}],
