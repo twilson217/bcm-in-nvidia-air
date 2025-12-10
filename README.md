@@ -278,7 +278,35 @@ Network: `192.168.200.0/24` (internal OOB management network)
 
 ## Creating Custom Topology Files
 
-You can create your own network topologies for different lab scenarios. The automation script automatically detects your BCM node and configures it.
+You can create your own network topologies for different lab scenarios. Write your topology in human-friendly DOT format, then convert to JSON for deployment.
+
+### Why Convert DOT to JSON?
+
+The NVIDIA Air DOT format doesn't support disabling the automatic OOB management network, which reserves `eth0` on all nodes. Our deployment needs `eth0` on the BCM node for direct SSH access. The JSON format allows us to set `"oob": false`.
+
+**Workflow:**
+1. Write your topology in DOT format (human-readable)
+2. Convert to JSON using the converter script
+3. Deploy using the generated JSON file
+
+### Using the Topology Converter
+
+```bash
+# Convert DOT to JSON (auto-names output as .json)
+python scripts/topology_converter.py topologies/my-lab.dot
+
+# Specify output file
+python scripts/topology_converter.py topologies/my-lab.dot -o topologies/my-lab.json
+
+# Set custom BCM MAC address (for license consistency)
+python scripts/topology_converter.py topologies/my-lab.dot --bcm-mac 48:b0:2d:00:00:00
+```
+
+The converter automatically:
+- ✅ Disables OOB globally and on all nodes
+- ✅ Detects BCM node and adds `eth0 → outbound` connection
+- ✅ Sets static MAC address on BCM node (for license consistency)
+- ✅ Preserves all node attributes including `mgmt_ip`
 
 ### BCM Node Naming Requirements
 
@@ -304,12 +332,12 @@ You can create your own network topologies for different lab scenarios. The auto
    - **Recommended**: `mgmt_ip` for predictable OOB IP address
 
 3. **Interface Naming**:
-   - `eth0` is reserved for Air's automatic OOB management
-   - Use `eth1`, `eth2`, `eth3`, etc. for data plane connections
+   - In DOT format, use `eth1`, `eth2`, etc. for data plane connections
+   - The converter will automatically add `bcm-01:eth0 → outbound` for SSH access
    - Example:
      ```dot
-     "bcm-01":"eth1" -- "leaf01":"swp1"
-     "bcm-01":"eth2" -- "leaf02":"swp1"
+     "bcm-01":"eth1" -- "leaf01":"swp5"
+     "bcm-01":"eth2" -- "leaf02":"swp5"
      ```
 
 4. **Network Nodes** (compute servers, switches):
@@ -348,11 +376,14 @@ graph "my-bcm-lab" {
 ### Using Your Custom Topology
 
 ```bash
-# Deploy with custom topology
-python deploy_bcm_air.py --dot-file topologies/my-lab.dot
+# Step 1: Convert DOT to JSON
+python scripts/topology_converter.py topologies/my-lab.dot
+
+# Step 2: Deploy with the generated JSON
+python deploy_bcm_air.py --topology topologies/my-lab.json
 
 # Or with internal Air site
-python deploy_bcm_air.py --internal --dot-file topologies/my-lab.dot
+python deploy_bcm_air.py --internal --topology topologies/my-lab.json
 ```
 
 ### Validation
@@ -754,6 +785,7 @@ bcm-in-nvidia-air/
 ├── scripts/                       # All scripts (installation, ZTP, testing)
 │   ├── bcm_install.sh             # BCM installation script (runs on head node)
 │   ├── cumulus-ztp.sh             # Cumulus switch ZTP script
+│   ├── topology_converter.py      # Convert DOT topologies to JSON
 │   ├── check_setup.py             # Setup verification helper
 │   ├── check_sim_state.py         # Debug simulation state
 │   ├── test_sdk_auth.py           # SDK authentication test
