@@ -235,42 +235,6 @@ class AirBCMDeployer:
         print(f"\n✓ Auto-generated cloud-init-password.yaml with your SSH key")
         print(f"  Public key: {self.ssh_public_key}")
     
-    def _ensure_bcm_config(self):
-        """
-        Ensure ansible/cm-bright-setup.conf exists.
-        If not, auto-generate it from the template using .env variables.
-        """
-        ansible_dir = Path(__file__).parent / 'ansible'
-        config_file = ansible_dir / 'cm-bright-setup.conf'
-        template_file = ansible_dir / 'cm-bright-setup.conf.example'
-        
-        if config_file.exists():
-            return  # Already exists
-        
-        if not template_file.exists():
-            print(f"\n⚠ Warning: BCM config template not found: {template_file}")
-            print(f"  BCM installation may fail without cm-bright-setup.conf")
-            return
-        
-        if not self.bcm_product_key or self.bcm_product_key == 'your_product_key_here':
-            print(f"\n⚠ Warning: BCM_PRODUCT_KEY not configured in .env")
-            print(f"  Please add your BCM product key to .env:")
-            print(f"    BCM_PRODUCT_KEY=your_actual_key")
-            print(f"  BCM installation will be skipped without a valid product key.")
-            return
-        
-        # Read template and replace placeholders
-        template_content = template_file.read_text()
-        config_content = template_content.replace('{BCM_PRODUCT_KEY}', self.bcm_product_key)
-        config_content = config_content.replace('{BCM_ADMIN_EMAIL}', self.bcm_admin_email)
-        config_content = config_content.replace('{PASSWORD}', self.default_password)
-        
-        # Write the config file
-        config_file.write_text(config_content)
-        print(f"\n✓ Auto-generated ansible/cm-bright-setup.conf")
-        print(f"  Product key: {self.bcm_product_key[:8]}...{self.bcm_product_key[-4:]}")
-        print(f"  Admin email: {self.bcm_admin_email}")
-    
     def _authenticate(self):
         """
         Authenticate with Air API to get JWT token

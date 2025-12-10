@@ -8,9 +8,6 @@
 # Cloud-init config with SSH keys (use .example template)
 cloud-init-password.yaml
 
-# BCM setup config with product key (use .example template)
-ansible/cm-bright-setup.conf
-
 # BCM ISO files (large, user downloads their own)
 .iso/
 

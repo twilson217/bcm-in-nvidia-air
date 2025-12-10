@@ -267,7 +267,6 @@ Network: `192.168.200.0/24` (internal OOB management network)
   - Runs official BCM Ansible playbook locally
 
 **Ansible:**
-- `ansible/install_bcm.yml` - Legacy Ansible playbook (kept for reference)
 - `ansible/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
 
 **Topologies:**
@@ -664,9 +663,9 @@ If you see "You must change your password now" when connecting:
 ### Ansible Playbook Failures
 
 If Ansible fails during deployment:
-- Verify API token is valid: `echo $AIR_API_TOKEN`
-- Check Ansible collections installed: `ansible-galaxy collection list`
-- Run with verbose output: `ansible-playbook -vvv ansible/install_bcm.yml`
+- Check logs: `ssh -F .ssh/<sim-name> bcm 'cat /home/ubuntu/ansible_bcm_install.log'`
+- Verify Ansible collections: `ansible-galaxy collection list`
+- Check ISO mounted: `ssh -F .ssh/<sim-name> bcm 'ls /mnt/dvd'`
 
 ### Dependency Management Issues
 
@@ -760,8 +759,7 @@ bcm-in-nvidia-air/
 ├── scripts/                       # Installation scripts
 │   └── bcm_install.sh             # BCM installation script (runs on head node)
 │
-├── ansible/                       # Ansible playbooks and scripts
-│   ├── install_bcm.yml            # Legacy playbook (kept for reference)
+├── ansible/                       # Ansible scripts
 │   └── cumulus-ztp.sh             # Cumulus switch ZTP script
 │
 ├── topologies/                    # Network topology templates
