@@ -1251,7 +1251,7 @@ Host bcm
         """Upload ZTP script to the simulation for Cumulus switches"""
         print("\nUploading ZTP script for Cumulus switches...")
         
-        ztp_file = Path(__file__).parent / 'ansible' / 'cumulus-ztp.sh'
+        ztp_file = Path(__file__).parent / 'scripts' / 'cumulus-ztp.sh'
         if not ztp_file.exists():
             print("  Warning: ansible/cumulus-ztp.sh not found, skipping ZTP upload")
             return

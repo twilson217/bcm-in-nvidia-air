@@ -265,9 +265,7 @@ Network: `192.168.200.0/24` (internal OOB management network)
   - Clones bcm-ansible-installer from GitHub
   - Generates cluster credentials and settings
   - Runs official BCM Ansible playbook locally
-
-**Ansible:**
-- `ansible/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
+- `scripts/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
 
 **Topologies:**
 - `topologies/test-bcm.dot` - Network topology definition (DOT format)
@@ -756,11 +754,10 @@ bcm-in-nvidia-air/
 ├── .iso/                          # BCM ISO files (gitignored)
 │   └── bcm-10.0-ubuntu2404.iso    # Place your BCM ISO here
 │
-├── scripts/                       # Installation scripts
-│   └── bcm_install.sh             # BCM installation script (runs on head node)
-│
-├── ansible/                       # Ansible scripts
+├── scripts/                       # Installation and automation scripts
+│   ├── bcm_install.sh             # BCM installation script (runs on head node)
 │   └── cumulus-ztp.sh             # Cumulus switch ZTP script
+│
 │
 ├── topologies/                    # Network topology templates
 │   ├── test-bcm.dot               # Default BCM lab topology (DOT format)
