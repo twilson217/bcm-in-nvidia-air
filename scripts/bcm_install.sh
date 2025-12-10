@@ -2,20 +2,20 @@
 # BCM Installation Script for NVIDIA Air
 # This script runs LOCALLY on the BCM head node
 # Placeholders are replaced by deploy_bcm_air.py before upload:
-#   {PASSWORD}     - User's configured password
-#   {PRODUCT_KEY}  - BCM license key
-#   {BCM_VERSION}  - 10 or 11
-#   {ADMIN_EMAIL}  - Admin email address
+#   __PASSWORD__     - User's configured password
+#   __PRODUCT_KEY__  - BCM license key
+#   __BCM_VERSION__  - 10 or 11
+#   __ADMIN_EMAIL__  - Admin email address
 
 set -euo pipefail
 
 # Configuration (populated by deploy_bcm_air.py)
-BCM_PASSWORD="{PASSWORD}"
-BCM_PRODUCT_KEY="{PRODUCT_KEY}"
-BCM_VERSION="{BCM_VERSION}"
-BCM_ADMIN_EMAIL="{ADMIN_EMAIL}"
-BCM_ISO_PATH="/root/bcm.iso"
-BCM_MOUNT_PATH="/mnt/bcm-iso"
+BCM_PASSWORD="__PASSWORD__"
+BCM_PRODUCT_KEY="__PRODUCT_KEY__"
+BCM_VERSION="__BCM_VERSION__"
+BCM_ADMIN_EMAIL="__ADMIN_EMAIL__"
+BCM_ISO_PATH="/home/ubuntu/bcm.iso"
+BCM_MOUNT_PATH="/mnt/dvd"  # Ansible mounts ISO here
 
 # Determine collection name based on version
 if [ "$BCM_VERSION" == "11" ]; then
@@ -49,8 +49,8 @@ echo "  ✓ IPv4 forced for apt"
 # Step 3: Update system and install dependencies
 echo "[Step 3/10] Installing system dependencies..."
 apt-get update -qq
-apt-get install -y -qq python3 python3-pip python3-venv git mysql-server rsync
-pip3 install --quiet PyMySQL python-ldap
+apt-get install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
+pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
 
 # Step 4: Secure MySQL installation
@@ -73,23 +73,26 @@ y
 EOF
 echo "  ✓ MySQL secured"
 
-# Step 5: Mount BCM ISO
-echo "[Step 5/10] Mounting BCM ISO..."
+# Step 5: Verify BCM ISO exists (Ansible will mount it)
+echo "[Step 5/10] Verifying BCM ISO..."
 if [ ! -f "$BCM_ISO_PATH" ]; then
     echo "  ✗ ERROR: BCM ISO not found at $BCM_ISO_PATH"
     exit 1
 fi
-mkdir -p "$BCM_MOUNT_PATH"
-mount -o loop "$BCM_ISO_PATH" "$BCM_MOUNT_PATH"
-echo "  ✓ ISO mounted at $BCM_MOUNT_PATH"
+echo "  ✓ ISO found at $BCM_ISO_PATH (Ansible will handle mounting)"
 
 # Step 6: Clone BCM Ansible installer
 echo "[Step 6/10] Setting up BCM Ansible installer..."
-if [ -d /root/bcm-ansible-installer ]; then
-    rm -rf /root/bcm-ansible-installer
+if [ -d /home/ubuntu/bcm-ansible-installer ]; then
+    rm -rf /home/ubuntu/bcm-ansible-installer
 fi
-git clone https://github.com/berkink-nvidia-com/bcm-ansible-installer.git /root/bcm-ansible-installer
-cd /root/bcm-ansible-installer
+git clone https://github.com/berkink-nvidia-com/bcm-ansible-installer.git /home/ubuntu/bcm-ansible-installer
+cd /home/ubuntu/bcm-ansible-installer
+
+# Fix playbook to use correct BCM version role
+sed -i "s/brightcomputing\.installer110\.head_node/${BCM_ROLE}/g" playbook.yml
+sed -i "s/brightcomputing\.installer100\.head_node/${BCM_ROLE}/g" playbook.yml
+echo "  ✓ Playbook configured for ${BCM_ROLE}"
 
 # Create Python virtual environment
 python3 -m venv venv
@@ -99,18 +102,19 @@ echo "  ✓ Ansible installer ready"
 
 # Step 7: Install BCM Ansible Galaxy collection
 echo "[Step 7/10] Installing Ansible Galaxy collection: ${BCM_COLLECTION}..."
-export ANSIBLE_LOG_PATH=/root/ansible_bcm_install.log
-ansible-galaxy collection install -r requirements.yml
-echo "  ✓ Collection installed"
+export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
+# Install our specific collection version (not whatever is in requirements.yml)
+ansible-galaxy collection install "${BCM_COLLECTION}" --force
+echo "  ✓ Collection installed: ${BCM_COLLECTION}"
 
 # Step 8: Create configuration files
 echo "[Step 8/10] Creating BCM configuration..."
 
 # Create group_vars directory structure
-mkdir -p /root/bcm-ansible-installer/group_vars/head_node
+mkdir -p /home/ubuntu/bcm-ansible-installer/group_vars/head_node
 
 # Create cluster-credentials.yml
-cat > /root/bcm-ansible-installer/group_vars/head_node/cluster-credentials.yml <<CREDS
+cat > /home/ubuntu/bcm-ansible-installer/group_vars/head_node/cluster-credentials.yml <<CREDS
 ---
 # Cluster credentials (auto-generated)
 product_key: ${BCM_PRODUCT_KEY}
@@ -124,7 +128,7 @@ mysql_login_unix_socket: /var/run/mysqld/mysqld.sock
 CREDS
 
 # Create cluster-settings.yml
-cat > /root/bcm-ansible-installer/group_vars/head_node/cluster-settings.yml <<SETTINGS
+cat > /home/ubuntu/bcm-ansible-installer/group_vars/head_node/cluster-settings.yml <<SETTINGS
 ---
 # General cluster settings (auto-generated)
 external_interface: eth0
@@ -134,7 +138,7 @@ management_ip_address: 192.168.200.254
 management_network_baseaddress: 192.168.200.0
 management_network_netmask: 24
 install_medium: dvd
-install_medium_dvd_path: "${BCM_MOUNT_PATH}"
+install_medium_dvd_path: "${BCM_ISO_PATH}"
 timezone: UTC
 license:
   country: US
@@ -147,7 +151,7 @@ license:
 SETTINGS
 
 # Create post_install_user_tasks.yml for DNS fixes
-cat > /root/bcm-ansible-installer/post_install_user_tasks.yml <<POSTTASKS
+cat > /home/ubuntu/bcm-ansible-installer/post_install_user_tasks.yml <<POSTTASKS
 ---
 - name: Add DNSSEC validation configuration
   ansible.builtin.blockinfile:
@@ -180,21 +184,21 @@ echo "  ✓ Configuration files created"
 
 # Step 9: Run BCM Ansible playbook
 echo "[Step 9/10] Running BCM installation playbook..."
-echo "  This will take 30-45 minutes. Check /root/ansible_bcm_install.log for progress."
+echo "  This will take 30-45 minutes. Check /home/ubuntu/ansible_bcm_install.log for progress."
 echo ""
 
-cd /root/bcm-ansible-installer
+cd /home/ubuntu/bcm-ansible-installer
 source venv/bin/activate
 
-ansible-playbook -i inventory/hosts playbook.yml 2>&1 | tee -a /root/ansible_bcm_install.log
+ansible-playbook -i inventory/hosts playbook.yml 2>&1 | tee -a /home/ubuntu/ansible_bcm_install.log
 
 # Check if installation succeeded
-if grep -q "failed=0" /root/ansible_bcm_install.log; then
+if grep -q "failed=0" /home/ubuntu/ansible_bcm_install.log; then
     echo ""
     echo "  ✓ BCM Ansible playbook completed successfully"
 else
     echo ""
-    echo "  ⚠ BCM installation may have had errors. Check /root/ansible_bcm_install.log"
+    echo "  ⚠ BCM installation may have had errors. Check /home/ubuntu/ansible_bcm_install.log"
 fi
 
 # Step 10: Post-installation configuration
@@ -240,7 +244,7 @@ echo "  - GUI:  https://<bcm-ip>:8081/base-view"
 echo "  - User: root"
 echo "  - Pass: (your configured password)"
 echo ""
-echo "Log file: /root/ansible_bcm_install.log"
+echo "Log file: /home/ubuntu/ansible_bcm_install.log"
 echo "Finished at: $(date)"
 echo "=============================================="
 

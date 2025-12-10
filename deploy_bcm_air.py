@@ -725,52 +725,93 @@ class AirBCMDeployer:
         check_count = 0
         first_check = True
         
+        # Use Air SDK for reliable node listing (same method that works for cloud-init)
+        try:
+            from air_sdk import AirApi
+            air = AirApi(api_url=self.api_base_url, bearer_token=self.jwt_token)
+            sim = air.simulations.get(self.simulation_id)
+            use_sdk = True
+            print(f"  Using Air SDK for node status...")
+        except Exception as e:
+            print(f"  SDK unavailable ({e}), using REST API...")
+            use_sdk = False
+        
         while time.time() - start_time < timeout:
             try:
-                # Query nodes specifically for this simulation
-                response = requests.get(
-                    f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/",
-                    headers=self.headers,
-                    timeout=30
-                )
+                nodes = []
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    # API returns paginated response with 'results' key or direct list
-                    if isinstance(data, list):
-                        nodes = data
-                    else:
-                        nodes = data.get('results', [])
+                if use_sdk:
+                    # Use SDK to get nodes - this is what worked for cloud-init
+                    try:
+                        sdk_nodes = list(sim.nodes)
+                        for n in sdk_nodes:
+                            nodes.append({
+                                'name': n.name,
+                                'state': getattr(n, 'state', 'unknown'),
+                                'id': str(n.id) if hasattr(n, 'id') else None
+                            })
+                    except Exception as e:
+                        print(f"  SDK error: {e}, falling back to REST API")
+                        use_sdk = False
+                
+                if not use_sdk:
+                    # Fallback to REST API
+                    response = requests.get(
+                        f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/",
+                        headers=self.headers,
+                        timeout=30
+                    )
                     
-                    # On first check, show all node states for debugging
-                    if first_check and nodes:
-                        print(f"\n  All nodes in simulation:")
+                    if response.status_code == 200:
+                        data = response.json()
+                        if isinstance(data, list):
+                            nodes = data
+                        else:
+                            nodes = data.get('results', [])
+                
+                # On first check, show all node states for debugging
+                if first_check:
+                    print(f"\n  All nodes in simulation ({len(nodes)} found):")
+                    if nodes:
                         for n in nodes:
-                            print(f"    • {n.get('name')}: {n.get('state', 'unknown')}")
-                        print()
-                        first_check = False
+                            name = n.get('name') if isinstance(n, dict) else getattr(n, 'name', 'unknown')
+                            state = n.get('state', 'unknown') if isinstance(n, dict) else getattr(n, 'state', 'unknown')
+                            print(f"    • {name}: {state}")
+                    else:
+                        print(f"    (no nodes returned)")
+                    print()
+                    first_check = False
+                
+                # Check if target node is in the list
+                target_node = None
+                for node in nodes:
+                    name = node.get('name') if isinstance(node, dict) else getattr(node, 'name', None)
+                    if name == node_name:
+                        target_node = node
+                        break
+                
+                if target_node:
+                    state = target_node.get('state', 'unknown') if isinstance(target_node, dict) else getattr(target_node, 'state', 'unknown')
                     
-                    for node in nodes:
-                        if node.get('name') == node_name:
-                            state = node.get('state', 'unknown')
-                            
-                            # Print state if it changed or every 6th check (~60 seconds)
-                            if state != last_state or check_count % 6 == 0:
-                                print(f"  Node '{node_name}' state: {state}                    ")
-                                last_state = state
-                            
-                            check_count += 1
-                            
-                            # Accept various ready states that Air might return
-                            ready_states = ['READY', 'RUNNING', 'LOADED', 'STARTED', 'BOOTED', 'UP']
-                            if state in ready_states or (state and state.upper() in ready_states):
-                                self.bcm_node_id = node.get('id')
-                                print(f"✓ Node '{node_name}' is ready! (State: {state})")
-                                return node
+                    # Print state if it changed or every 6th check (~60 seconds)
+                    if state != last_state or check_count % 6 == 0:
+                        print(f"  Node '{node_name}' state: {state}                    ")
+                        last_state = state
                     
-                    # If we get here, node not found in results
-                    if not nodes:
-                        print(f"  No nodes found yet (simulation might still be initializing)...")
+                    check_count += 1
+                    
+                    # Accept various ready states that Air might return
+                    ready_states = ['READY', 'RUNNING', 'LOADED', 'STARTED', 'BOOTED', 'UP']
+                    if state in ready_states or (state and str(state).upper() in ready_states):
+                        node_id = target_node.get('id') if isinstance(target_node, dict) else getattr(target_node, 'id', None)
+                        self.bcm_node_id = str(node_id) if node_id else None
+                        print(f"✓ Node '{node_name}' is ready! (State: {state})")
+                        return target_node
+                else:
+                    # Node not found in results - print message periodically
+                    if check_count % 6 == 0:
+                        print(f"  Node '{node_name}' not found in API response (checking...)                    ")
+                    check_count += 1
                 
                 time.sleep(10)
             except Exception as e:
@@ -1338,13 +1379,19 @@ Host bcm
         print(f"  Source: {iso_path}")
         print(f"  This may take 10-20 minutes depending on connection speed...")
         
+        # Wait a moment for SSH service to stabilize
+        print(f"  Waiting for SSH service to stabilize...")
+        time.sleep(10)
+        
         # Use rsync for reliable large file transfer
+        # Upload to /home/ubuntu/ since we connect as ubuntu user
         ssh_cmd = f"ssh -F {ssh_config_file} -o StrictHostKeyChecking=no"
-        remote_path = f"air-{self.bcm_node_name}:/root/bcm.iso"
+        remote_path = f"air-{self.bcm_node_name}:/home/ubuntu/bcm.iso"
         
         cmd = [
             'rsync',
             '-avz',
+            '--partial',      # Keep partial files on interrupt (enables resume)
             '--progress',
             '-e', ssh_cmd,
             str(iso_path),
@@ -1392,11 +1439,11 @@ Host bcm
         # Extract major version (10 or 11)
         major_version = bcm_version.split('.')[0]
         
-        # Replace placeholders
-        script_content = script_content.replace('{PASSWORD}', self.default_password)
-        script_content = script_content.replace('{PRODUCT_KEY}', self.bcm_product_key)
-        script_content = script_content.replace('{BCM_VERSION}', major_version)
-        script_content = script_content.replace('{ADMIN_EMAIL}', self.bcm_admin_email)
+        # Replace placeholders (using __NAME__ format to avoid bash variable conflicts)
+        script_content = script_content.replace('__PASSWORD__', self.default_password)
+        script_content = script_content.replace('__PRODUCT_KEY__', self.bcm_product_key)
+        script_content = script_content.replace('__BCM_VERSION__', major_version)
+        script_content = script_content.replace('__ADMIN_EMAIL__', self.bcm_admin_email)
         
         # Write to temp file
         temp_script = Path('/tmp/bcm_install.sh')
@@ -1405,7 +1452,7 @@ Host bcm
         
         # Upload via scp
         ssh_cmd = f"-F {ssh_config_file} -o StrictHostKeyChecking=no"
-        remote_path = f"air-{self.bcm_node_name}:/root/bcm_install.sh"
+        remote_path = f"air-{self.bcm_node_name}:/home/ubuntu/bcm_install.sh"
         
         cmd = [
             'scp',
@@ -1425,7 +1472,7 @@ Host bcm
                 '-F', ssh_config_file,
                 '-o', 'StrictHostKeyChecking=no',
                 f'air-{self.bcm_node_name}',
-                'chmod +x /root/bcm_install.sh'
+                'chmod +x /home/ubuntu/bcm_install.sh'
             ]
             subprocess.run(ssh_make_exec, check=True, capture_output=True)
             
@@ -1447,7 +1494,7 @@ Host bcm
         print(f"\n🚀 Starting BCM installation on head node...")
         print(f"  This will take 30-45 minutes.")
         print(f"  You can monitor progress in a separate terminal:")
-        print(f"    ssh -F {ssh_config_file} air-{self.bcm_node_name} 'tail -f /root/ansible_bcm_install.log'")
+        print(f"    ssh -F {ssh_config_file} air-{self.bcm_node_name} 'tail -f /home/ubuntu/ansible_bcm_install.log'")
         print("")
         
         # Execute the install script via SSH
@@ -1459,7 +1506,7 @@ Host bcm
             '-o', 'ServerAliveInterval=60',
             '-o', 'ServerAliveCountMax=30',
             f'air-{self.bcm_node_name}',
-            'sudo /root/bcm_install.sh'
+            'sudo /home/ubuntu/bcm_install.sh'
         ]
         
         try:
@@ -1473,7 +1520,7 @@ Host bcm
             return True
         except subprocess.CalledProcessError as e:
             print(f"\n✗ BCM installation failed with exit code {e.returncode}")
-            print(f"  Check logs: ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /root/ansible_bcm_install.log'")
+            print(f"  Check logs: ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /home/ubuntu/ansible_bcm_install.log'")
             return False
     
     def install_bcm(self, bcm_version, ssh_config_file):
@@ -1541,9 +1588,9 @@ Host bcm
         
         print(f"\nInstallation Logs:")
         if ssh_config_file:
-            print(f"  ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /root/ansible_bcm_install.log'")
+            print(f"  ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /home/ubuntu/ansible_bcm_install.log'")
         else:
-            print(f"  /root/ansible_bcm_install.log on {self.bcm_node_name}")
+            print(f"  /home/ubuntu/ansible_bcm_install.log on {self.bcm_node_name}")
         
         print("\n" + "="*60 + "\n")
 
@@ -1566,6 +1613,9 @@ Examples:
   # Non-interactive deployment (accept all defaults: BCM 10, Nvidia1234!, auto name)
   python deploy_bcm_air.py --non-interactive
   python deploy_bcm_air.py -y
+  
+  # Non-interactive with BCM 11
+  python deploy_bcm_air.py -y --bcm-version 11
   
   # Resume a failed/interrupted deployment
   python deploy_bcm_air.py --resume
@@ -1608,6 +1658,11 @@ Examples:
         '--skip-ansible',
         action='store_true',
         help='Skip Ansible installation (create simulation only)'
+    )
+    parser.add_argument(
+        '--bcm-version',
+        choices=['10', '11'],
+        help='BCM version to install (10 or 11). If not specified, will prompt or use default (10) in non-interactive mode.'
     )
     parser.add_argument(
         '--non-interactive', '-y',
@@ -1687,6 +1742,18 @@ Examples:
             bcm_version = progress.get('bcm_version')
             collection_name = progress.get('collection_name')
             print(f"\n  [resume] BCM version: {bcm_version}")
+        elif args.bcm_version:
+            # Use command-line specified version
+            if args.bcm_version == '10':
+                bcm_version = '10.x'
+                collection_name = 'brightcomputing.bcm100'
+            else:
+                bcm_version = '11.x'
+                collection_name = 'brightcomputing.bcm110'
+            print(f"\nUsing BCM version from command line: {bcm_version}")
+            progress.complete_step('bcm_version_selected', 
+                                   bcm_version=bcm_version, 
+                                   collection_name=collection_name)
         else:
             bcm_version, collection_name = deployer.prompt_bcm_version()
             progress.complete_step('bcm_version_selected', 
