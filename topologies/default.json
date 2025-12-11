@@ -301,17 +301,10 @@
                 {
                     "interface": "eth0",
                     "node": "bcm-01",
-                    "mac": "48:b0:2d:09:ae:ac",
+                    "mac": "48:b0:2d:00:00:00",
                     "network_pci": null
                 },
-                {
-                    "interface": "swp0",
-                    "node": "oob-mgmt-switch",
-                    "mac": "48:b0:2d:76:32:b1",
-                    "network_pci": null,
-                    "interface_role": null,
-                    "scalable_unit": null
-                }
+                "outbound"
             ],
             [
                 {
@@ -816,7 +809,14 @@
                     "mac": "48:b0:2d:a4:dc:c1",
                     "network_pci": null
                 },
-                "outbound"
+                {
+                    "interface": "swp0",
+                    "node": "oob-mgmt-switch",
+                    "mac": "48:b0:2d:76:32:b1",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                }
             ],
             [
                 {

@@ -13,27 +13,34 @@ The recommended workflow for custom topologies:
 
 ## Required Design Constraints
 
-### 1. BCM Node Must Connect to "outbound"
+### 1. BCM Node Must Use eth0 for "outbound"
 
-**Requirement**: The BCM head node must have exactly one interface connected to `"outbound"`.
+**Requirement**: The BCM head node's **eth0** must be connected to `"outbound"`.
 
 **Why**: This interface is used for:
 - SSH service for external access (allows deployment script to connect)
 - BCM's "external interface" for internet access (DHCP)
 
+**⚠️ Critical**: NVIDIA Air's infrastructure has special handling for `eth0`:
+- The `40-air.yaml` netplan configuration specifically configures `eth0` for DHCP
+- Using a different interface (e.g., eth3, eth4) for outbound results in:
+  - Hostname not being set properly (stays as "ubuntu")
+  - Interface not getting an IP address automatically
+  - SSH service failing to work
+
 **Example** (from `default.json`):
 ```json
 [
     {
-        "interface": "eth4",
+        "interface": "eth0",
         "node": "bcm-01",
-        "mac": "48:b0:2d:a4:dc:c1"
+        "mac": "48:b0:2d:00:00:00"
     },
     "outbound"
 ]
 ```
 
-The script automatically detects this interface and configures it as BCM's **external interface** with DHCP.
+**Recommendation**: Keep the licensing MAC (`48:b0:2d:00:00:00`) on eth0 to maintain license consistency.
 
 ### 2. BCM Node Should Connect to "oob-mgmt-switch"
 
@@ -48,7 +55,7 @@ The script automatically detects this interface and configures it as BCM's **ext
 ```json
 [
     {
-        "interface": "eth0",
+        "interface": "eth4",
         "node": "bcm-01"
     },
     {
@@ -69,8 +76,8 @@ The script automatically detects this interface and configures it with **192.168
 | BCM → leaf switches | Data plane | Configured later by BCM |
 
 **Default topology (`default.json`) mapping:**
-- `eth4` → outbound (external, DHCP)
-- `eth0` → oob-mgmt-switch (management, 192.168.200.254)
+- `eth0` → outbound (external, DHCP) - **must be eth0**
+- `eth4` → oob-mgmt-switch (management, 192.168.200.254)
 - `eth1`, `eth2` → leaf switches (data plane)
 
 ### 4. BCM Node Naming Convention
@@ -121,15 +128,15 @@ The script automatically detects this interface and configures it with **192.168
 ```json
 [
     {
-        "interface": "eth4",
+        "interface": "eth0",
         "node": "bcm-01",
-        "mac": "48:b0:2d:a4:dc:c1"
+        "mac": "48:b0:2d:00:00:00"
     },
     "outbound"
 ]
 ```
 
-**Note**: Keep this MAC address consistent across all your topologies to avoid license issues.
+**Note**: Keep `48:b0:2d:00:00:00` on `eth0` in all your topologies to maintain license consistency.
 
 ## Validation
 
