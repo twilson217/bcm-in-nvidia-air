@@ -35,7 +35,6 @@ class ProgressTracker:
         'simulation_started',
         'simulation_loaded',
         'ssh_enabled',
-        'ztp_uploaded',
         'node_ready',
         'ssh_configured',
         'bcm_installed',
@@ -1223,38 +1222,6 @@ Host bcm
         
         return config_file
     
-    def upload_ztp_script(self):
-        """Upload ZTP script to the simulation for Cumulus switches"""
-        print("\nUploading ZTP script for Cumulus switches...")
-        
-        ztp_file = Path(__file__).parent / 'scripts' / 'cumulus-ztp.sh'
-        if not ztp_file.exists():
-            print("  Warning: ansible/cumulus-ztp.sh not found, skipping ZTP upload")
-            return
-        
-        with open(ztp_file, 'r') as f:
-            ztp_content = f.read()
-        
-        # Update ZTP script for each Cumulus switch node
-        switches = ['leaf01', 'leaf02']
-        for switch in switches:
-            try:
-                payload = {
-                    'ztp_script': ztp_content
-                }
-                response = requests.post(
-                    f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/{switch}/ztp/",
-                    headers=self.headers,
-                    json=payload
-                )
-                
-                if response.status_code in [200, 201]:
-                    print(f"  ✓ ZTP script uploaded for {switch}")
-                else:
-                    print(f"  ✗ Failed to upload ZTP for {switch}: {response.status_code}")
-            except Exception as e:
-                print(f"  Warning: Error uploading ZTP for {switch}: {e}")
-    
     def find_bcm_iso(self, bcm_version):
         """
         Find BCM ISO file in ./iso/ directory
@@ -1771,13 +1738,6 @@ Examples:
         else:
             deployer.enable_ssh_service()
             progress.complete_step('ssh_enabled')
-        
-        # Step: Upload ZTP script
-        if args.resume and progress.is_step_completed('ztp_uploaded'):
-            print(f"  [resume] ZTP already uploaded")
-        else:
-            deployer.upload_ztp_script()
-            progress.complete_step('ztp_uploaded')
         
         # Step: Wait for node ready
         if args.resume and progress.is_step_completed('node_ready'):
