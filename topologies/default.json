@@ -7,7 +7,7 @@
             "bcm-01": {
                 "nic_model": "e1000",
                 "cpu": 4,
-                "memory": 8388608,
+                "memory": 8192,
                 "storage": 200,
                 "positioning": {
                     "x": 0,
@@ -29,7 +29,7 @@
             "cpu-01": {
                 "nic_model": "e1000",
                 "cpu": 2,
-                "memory": 4194304,
+                "memory": 4096,
                 "storage": 40,
                 "positioning": {
                     "x": 303.60567954130534,
@@ -51,7 +51,7 @@
             "cpu-02": {
                 "nic_model": "e1000",
                 "cpu": 2,
-                "memory": 4194304,
+                "memory": 4096,
                 "storage": 40,
                 "positioning": {
                     "x": 581.2938051446831,
@@ -73,7 +73,7 @@
             "cpu-03": {
                 "nic_model": "e1000",
                 "cpu": 2,
-                "memory": 4194304,
+                "memory": 4096,
                 "storage": 40,
                 "positioning": {
                     "x": 883.4415065784101,
@@ -95,7 +95,7 @@
             "cpu-04": {
                 "nic_model": "e1000",
                 "cpu": 2,
-                "memory": 4194304,
+                "memory": 4096,
                 "storage": 40,
                 "positioning": {
                     "x": 1106.4552862080657,
@@ -117,7 +117,7 @@
             "cpu-05": {
                 "nic_model": "e1000",
                 "cpu": 2,
-                "memory": 4194304,
+                "memory": 4096,
                 "storage": 40,
                 "positioning": {
                     "x": 1397.0925990157461,
