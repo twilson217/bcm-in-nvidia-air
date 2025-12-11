@@ -796,7 +796,7 @@
                 {
                     "interface": "eth0",
                     "node": "spine-02",
-                    "mac": "48:b0:2d:00:00:00",
+                    "mac": "48:b0:2d:09:ae:ac",
                     "network_pci": null,
                     "interface_role": null,
                     "scalable_unit": null
