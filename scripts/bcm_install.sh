@@ -88,7 +88,7 @@ echo "[Step 6/10] Setting up BCM Ansible installer..."
 if [ -d /home/ubuntu/bcm-ansible-installer ]; then
     rm -rf /home/ubuntu/bcm-ansible-installer
 fi
-git clone https://github.com/berkink-nvidia-com/bcm-ansible-installer.git /home/ubuntu/bcm-ansible-installer
+git clone https://github.com/twilson217/bcm-ansible-installer.git /home/ubuntu/bcm-ansible-installer
 cd /home/ubuntu/bcm-ansible-installer
 
 # Fix playbook to use correct BCM version role
