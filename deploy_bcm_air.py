@@ -445,6 +445,40 @@ class AirBCMDeployer:
         print(f"  ⚠ No outbound interface found for {self.bcm_node_name}")
         return None
     
+    def detect_bcm_management_interface(self, topology_data):
+        """
+        Detect which interface on the BCM node connects to "oob-mgmt-switch".
+        This interface will be configured as the BCM management network (192.168.200.x).
+        
+        Args:
+            topology_data: Parsed JSON topology data
+            
+        Returns:
+            Interface name (e.g., 'eth0', 'eth1') or None if not found
+        """
+        links = topology_data.get('content', {}).get('links', [])
+        
+        for link in links:
+            if len(link) != 2:
+                continue
+            
+            endpoint1 = link[0]
+            endpoint2 = link[1]
+            
+            # Check if BCM node connects to oob-mgmt-switch
+            if isinstance(endpoint1, dict) and isinstance(endpoint2, dict):
+                if endpoint1.get('node') == self.bcm_node_name and endpoint2.get('node') == 'oob-mgmt-switch':
+                    iface = endpoint1.get('interface')
+                    print(f"  ✓ BCM management interface detected: {self.bcm_node_name}:{iface} → oob-mgmt-switch")
+                    return iface
+                if endpoint2.get('node') == self.bcm_node_name and endpoint1.get('node') == 'oob-mgmt-switch':
+                    iface = endpoint2.get('interface')
+                    print(f"  ✓ BCM management interface detected: {self.bcm_node_name}:{iface} → oob-mgmt-switch")
+                    return iface
+        
+        print(f"  ⚠ No oob-mgmt-switch connection found for {self.bcm_node_name}")
+        return None
+    
     def get_next_simulation_name(self):
         """
         Generate the next simulation name following the pattern YYYYMMNNN-BCM-Lab
@@ -566,6 +600,12 @@ class AirBCMDeployer:
                 f"BCM node '{bcm_node}' must have an interface connected to 'outbound' for SSH access.\n"
                 "See topologies/topology-design.md for requirements."
             )
+        
+        # Detect which interface connects to oob-mgmt-switch (for BCM management network)
+        self.bcm_management_interface = self.detect_bcm_management_interface(topology_data)
+        if not self.bcm_management_interface:
+            print(f"  ℹ No oob-mgmt-switch found - using eth0 as default management interface")
+            self.bcm_management_interface = 'eth0'
         
         print(f"\nCreating simulation from JSON file: {simulation_name}")
         
@@ -1351,6 +1391,8 @@ Host bcm
         script_content = script_content.replace('__PRODUCT_KEY__', self.bcm_product_key)
         script_content = script_content.replace('__BCM_VERSION__', major_version)
         script_content = script_content.replace('__ADMIN_EMAIL__', self.bcm_admin_email)
+        script_content = script_content.replace('__EXTERNAL_INTERFACE__', self.bcm_outbound_interface)
+        script_content = script_content.replace('__MANAGEMENT_INTERFACE__', self.bcm_management_interface)
         
         # Write to temp file
         temp_script = Path('/tmp/bcm_install.sh')
@@ -1693,8 +1735,10 @@ Examples:
             deployer.simulation_id = progress.get('simulation_id')
             deployer.bcm_node_name = progress.get('bcm_node_name', 'bcm-01')
             deployer.bcm_outbound_interface = progress.get('bcm_outbound_interface', 'eth0')
+            deployer.bcm_management_interface = progress.get('bcm_management_interface', 'eth0')
             print(f"  [resume] Simulation ID: {deployer.simulation_id}")
             print(f"  [resume] BCM outbound interface: {deployer.bcm_outbound_interface}")
+            print(f"  [resume] BCM management interface: {deployer.bcm_management_interface}")
         else:
             topology_file = Path(args.topology_file)
             if not topology_file.exists():
@@ -1706,7 +1750,8 @@ Examples:
                                    simulation_id=deployer.simulation_id,
                                    simulation_name=simulation_name,
                                    bcm_node_name=deployer.bcm_node_name,
-                                   bcm_outbound_interface=deployer.bcm_outbound_interface)
+                                   bcm_outbound_interface=deployer.bcm_outbound_interface,
+                                   bcm_management_interface=deployer.bcm_management_interface)
         
         # Step: Configure cloud-init
         if args.resume and progress.is_step_completed('cloudinit_configured'):

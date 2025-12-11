@@ -17,27 +17,63 @@ The recommended workflow for custom topologies:
 
 **Requirement**: The BCM head node must have exactly one interface connected to `"outbound"`.
 
-**Why**: This interface is used to create an SSH service for external access. Without it, the deployment script cannot establish SSH connectivity to install BCM.
+**Why**: This interface is used for:
+- SSH service for external access (allows deployment script to connect)
+- BCM's "external interface" for internet access (DHCP)
 
 **Example** (from `default.json`):
 ```json
-{
-    "links": [
-        [
-            {
-                "interface": "eth4",
-                "node": "bcm-01",
-                "mac": "48:b0:2d:a4:dc:c1"
-            },
-            "outbound"
-        ]
-    ]
-}
+[
+    {
+        "interface": "eth4",
+        "node": "bcm-01",
+        "mac": "48:b0:2d:a4:dc:c1"
+    },
+    "outbound"
+]
 ```
 
-The script will automatically detect which interface connects to `"outbound"` and create the SSH service on that interface.
+The script automatically detects this interface and configures it as BCM's **external interface** with DHCP.
 
-### 2. BCM Node Naming Convention
+### 2. BCM Node Should Connect to "oob-mgmt-switch"
+
+**Requirement**: For BCM to manage compute nodes, the BCM head node should have an interface connected to `oob-mgmt-switch`.
+
+**Why**: This interface becomes BCM's **management interface** (192.168.200.254/24) - the internal network for:
+- DHCP/PXE boot services for compute nodes
+- Node management and provisioning
+- Internal cluster communication
+
+**Example** (from `default.json`):
+```json
+[
+    {
+        "interface": "eth0",
+        "node": "bcm-01"
+    },
+    {
+        "interface": "swp0",
+        "node": "oob-mgmt-switch"
+    }
+]
+```
+
+The script automatically detects this interface and configures it with **192.168.200.254/24**.
+
+### 3. Interface Mapping Summary
+
+| Connection | BCM Role | IP Configuration |
+|------------|----------|------------------|
+| BCM → `outbound` | External interface | DHCP (internet access) |
+| BCM → `oob-mgmt-switch` | Management interface | 192.168.200.254/24 (internal network) |
+| BCM → leaf switches | Data plane | Configured later by BCM |
+
+**Default topology (`default.json`) mapping:**
+- `eth4` → outbound (external, DHCP)
+- `eth0` → oob-mgmt-switch (management, 192.168.200.254)
+- `eth1`, `eth2` → leaf switches (data plane)
+
+### 4. BCM Node Naming Convention
 
 **Requirement**: The BCM head node must have a name starting with `bcm` (case-insensitive).
 
@@ -45,7 +81,7 @@ The script will automatically detect which interface connects to `"outbound"` an
 
 **Why**: The deployment script auto-detects the BCM node by name pattern to configure cloud-init, SSH, and run the installation.
 
-### 3. OOB Management (Optional but Recommended)
+### 5. OOB Management (Recommended: Disabled)
 
 **Recommendation**: Disable automatic OOB management (`"oob": false`) in the topology.
 
@@ -65,11 +101,13 @@ The script will automatically detect which interface connects to `"outbound"` an
 }
 ```
 
-### 4. PXE Boot Nodes
+### 6. PXE Boot Nodes
 
 **Naming**: PXE boot nodes (compute nodes) should follow a pattern like `cpu-01`, `compute-01`, `node-01`, etc.
 
-**Configuration**: Use `"os": "pxe_boot_10G"` or `"os": "pxe"` for nodes that will PXE boot from BCM.
+**Configuration**: 
+- `"os": "pxe"` - Boot from network
+- `"boot": "network"` - Enable PXE boot
 
 **Cloud-init**: PXE boot nodes are automatically skipped during cloud-init configuration since they boot from BCM.
 
@@ -93,20 +131,15 @@ The script will automatically detect which interface connects to `"outbound"` an
 
 **Note**: Keep this MAC address consistent across all your topologies to avoid license issues.
 
-### OOB Management Switch
-
-**Purpose**: An `oob-mgmt-switch` can be used to provide out-of-band management connectivity to all nodes.
-
-**Example**: In `default.json`, all nodes connect to `oob-mgmt-switch` via `eth0`, while `eth4` on `bcm-01` provides outbound access.
-
 ## Validation
 
-The deployment script validates:
+The deployment script validates and detects:
 - ✅ BCM node exists (name starts with `bcm`)
-- ✅ BCM node has an interface connected to `"outbound"`
+- ✅ BCM node has an interface connected to `"outbound"` → external interface
+- ✅ BCM node has an interface connected to `"oob-mgmt-switch"` → management interface
 - ✅ Topology is in JSON format
 
-If validation fails, the script will provide an error message explaining the issue.
+If no `oob-mgmt-switch` connection is found, the script defaults to `eth0` for the management interface.
 
 ## Example Topologies
 
@@ -114,4 +147,3 @@ If validation fails, the script will provide an error message explaining the iss
 |------|-------------|
 | `default.json` | Full lab with leaf switches, compute nodes, and OOB management |
 | `test-bcm.json` | Minimal test topology for development |
-

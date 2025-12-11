@@ -14,6 +14,8 @@ BCM_PASSWORD="__PASSWORD__"
 BCM_PRODUCT_KEY="__PRODUCT_KEY__"
 BCM_VERSION="__BCM_VERSION__"
 BCM_ADMIN_EMAIL="__ADMIN_EMAIL__"
+BCM_EXTERNAL_INTERFACE="__EXTERNAL_INTERFACE__"  # Connected to outbound (DHCP)
+BCM_MANAGEMENT_INTERFACE="__MANAGEMENT_INTERFACE__"  # Connected to oob-mgmt-switch (192.168.200.254)
 BCM_ISO_PATH="/home/ubuntu/bcm.iso"
 BCM_MOUNT_PATH="/mnt/dvd"  # Ansible mounts ISO here
 
@@ -128,12 +130,15 @@ mysql_login_unix_socket: /var/run/mysqld/mysqld.sock
 CREDS
 
 # Create cluster-settings.yml
+# Interface mapping (detected from topology by deploy_bcm_air.py):
+#   external_interface = outbound connection (for internet access via DHCP)
+#   management_interface = oob-mgmt-switch connection (BCM internal network 192.168.200.0/24)
 cat > /home/ubuntu/bcm-ansible-installer/group_vars/head_node/cluster-settings.yml <<SETTINGS
 ---
-# General cluster settings (auto-generated)
-external_interface: eth0
+# General cluster settings (auto-generated from topology)
+external_interface: ${BCM_EXTERNAL_INTERFACE}
 external_ip_address: DHCP
-management_interface: eth1
+management_interface: ${BCM_MANAGEMENT_INTERFACE}
 management_ip_address: 192.168.200.254
 management_network_baseaddress: 192.168.200.0
 management_network_netmask: 24
@@ -149,6 +154,8 @@ license:
   cluster_name: bcm-air-lab
   mac: "{{ ansible_default_ipv4.macaddress }}"
 SETTINGS
+echo "  External interface: ${BCM_EXTERNAL_INTERFACE} (outbound/DHCP)"
+echo "  Management interface: ${BCM_MANAGEMENT_INTERFACE} (oob-mgmt-switch/192.168.200.254)"
 
 # Create post_install_user_tasks.yml for DNS fixes
 cat > /home/ubuntu/bcm-ansible-installer/post_install_user_tasks.yml <<POSTTASKS
