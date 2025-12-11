@@ -1025,9 +1025,9 @@ class AirBCMDeployer:
                     skipped_nodes.append((node_name, 'switch'))
                     continue
                 
-                # Skip compute nodes (typically PXE boot)
-                # Matches: compute0, compute1, compute-01, node01, etc.
-                if re.match(r'^(compute|node)\d+', node_name.lower()) or re.match(r'^(compute|node)-\d+', node_name.lower()):
+                # Skip compute/cpu nodes (typically PXE boot)
+                # Matches: compute0, compute1, compute-01, cpu-01, node01, etc.
+                if re.match(r'^(compute|cpu|node)[-_]?\d+', node_name.lower()):
                     skipped_nodes.append((node_name, 'PXE boot (compute node)'))
                     continue
                 

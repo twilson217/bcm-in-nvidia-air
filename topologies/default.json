@@ -35,7 +35,7 @@
                     "x": 303.60567954130534,
                     "y": 554.9829535038381
                 },
-                "os": "pxe_boot_10G",
+                "os": "pxe",
                 "features": {
                     "uefi": false,
                     "tpm": false
@@ -46,7 +46,8 @@
                 "emulation_type": null,
                 "network_pci": {},
                 "cpu_options": [],
-                "storage_pci": {}
+                "storage_pci": {},
+                "boot": "network"
             },
             "cpu-02": {
                 "nic_model": "e1000",
@@ -57,7 +58,7 @@
                     "x": 581.2938051446831,
                     "y": 550.6665577690706
                 },
-                "os": "pxe_boot_10G",
+                "os": "pxe",
                 "features": {
                     "uefi": false,
                     "tpm": false
@@ -68,7 +69,8 @@
                 "emulation_type": null,
                 "network_pci": {},
                 "cpu_options": [],
-                "storage_pci": {}
+                "storage_pci": {},
+                "boot": "network"
             },
             "cpu-03": {
                 "nic_model": "e1000",
@@ -79,7 +81,7 @@
                     "x": 883.4415065784101,
                     "y": 552.1053563473264
                 },
-                "os": "pxe_boot_10G",
+                "os": "pxe",
                 "features": {
                     "uefi": false,
                     "tpm": false
@@ -90,7 +92,8 @@
                 "emulation_type": null,
                 "network_pci": {},
                 "cpu_options": [],
-                "storage_pci": {}
+                "storage_pci": {},
+                "boot": "network"
             },
             "cpu-04": {
                 "nic_model": "e1000",
@@ -101,7 +104,7 @@
                     "x": 1106.4552862080657,
                     "y": 566.4933421298848
                 },
-                "os": "pxe_boot_10G",
+                "os": "pxe",
                 "features": {
                     "uefi": false,
                     "tpm": false
@@ -112,7 +115,8 @@
                 "emulation_type": null,
                 "network_pci": {},
                 "cpu_options": [],
-                "storage_pci": {}
+                "storage_pci": {},
+                "boot": "network"
             },
             "cpu-05": {
                 "nic_model": "e1000",
@@ -123,7 +127,7 @@
                     "x": 1397.0925990157461,
                     "y": 573.687335021164
                 },
-                "os": "pxe_boot_10G",
+                "os": "pxe",
                 "features": {
                     "uefi": false,
                     "tpm": false
@@ -134,7 +138,8 @@
                 "emulation_type": null,
                 "network_pci": {},
                 "cpu_options": [],
-                "storage_pci": {}
+                "storage_pci": {},
+                "boot": "network"
             },
             "leaf-01": {
                 "nic_model": "virtio",
@@ -798,7 +803,7 @@
                 {
                     "interface": "eth0",
                     "node": "spine-02",
-                    "mac": "48:b0:2d:09:e2:c1",
+                    "mac": "48:b0:2d:00:00:00",
                     "network_pci": null,
                     "interface_role": null,
                     "scalable_unit": null
