@@ -1833,6 +1833,27 @@ Examples:
         # Print summary
         deployer.print_summary(bcm_version, ssh_config_file)
         
+        # Prompt to clear progress file for next deployment
+        print("\n" + "="*60)
+        print("Cleanup")
+        print("="*60)
+        print("\nDeployment completed successfully!")
+        print("Would you like to clear the progress file so the next")
+        print("deployment starts fresh? (Recommended)")
+        
+        if args.non_interactive:
+            print("  [non-interactive] Clearing progress file")
+            progress.clear()
+            print("  ✓ Progress file cleared")
+        else:
+            print("\nClear progress file? [Y/n]: ", end="")
+            response = input().strip().lower()
+            if response in ['', 'y', 'yes']:
+                progress.clear()
+                print("  ✓ Progress file cleared")
+            else:
+                print("  ℹ Progress file kept (use --resume to continue from checkpoint)")
+        
         return 0
         
     except KeyboardInterrupt:
