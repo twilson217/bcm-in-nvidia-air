@@ -96,7 +96,7 @@ BCM_PRODUCT_KEY=123456-789012-345678-901234-567890
 BCM_ADMIN_EMAIL=your_email@nvidia.com
 ```
 
-> **⚠️ License MAC Address:** BCM licenses are bound to the MAC address of the head node's primary interface (eth0). The topology file `topologies/test-bcm.json` sets a static MAC address (`48:b0:2d:00:00:00`) to ensure your license works consistently across simulation rebuilds. If you need to use a different MAC (to match an existing license), update the `mac` field in the topology file.
+> **⚠️ License MAC Address:** BCM licenses are bound to the MAC address of the head node's outbound interface. The default topology (`topologies/default.json`) sets a static MAC address to ensure your license works consistently across simulation rebuilds. If you need to use a different MAC (to match an existing license), update the `mac` field on the BCM node's outbound interface in your topology file.
 
 8. Place your BCM ISO file:
 ```bash
@@ -260,8 +260,8 @@ Network: `192.168.200.0/24` (internal OOB management network)
 - `scripts/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
 
 **Topologies:**
-- `topologies/test-bcm.dot` - Network topology definition (DOT format)
-- `topologies/test-bcm.json` - Network topology definition (JSON format)
+- `topologies/default.json` - Default BCM lab topology (JSON format)
+- `topologies/topology-design.md` - Topology design requirements
 
 **ISO Directory:**
 - `.iso/` - Place your BCM ISO files here (gitignored)
@@ -278,131 +278,60 @@ Network: `192.168.200.0/24` (internal OOB management network)
 
 ## Creating Custom Topology Files
 
-You can create your own network topologies for different lab scenarios. Write your topology in human-friendly DOT format, then convert to JSON for deployment.
+Create custom topologies using the NVIDIA Air web UI and export them to JSON format.
 
-### Why Convert DOT to JSON?
+### Workflow
 
-The NVIDIA Air DOT format doesn't support disabling the automatic OOB management network, which reserves `eth0` on all nodes. Our deployment needs `eth0` on the BCM node for direct SSH access. The JSON format allows us to set `"oob": false`.
+1. **Create in NVIDIA Air Web UI**: Use the visual topology editor at air.nvidia.com (or air-inside.nvidia.com)
+2. **Export to JSON**: Use the export function to download the topology as JSON
+3. **Place in `topologies/` directory**: Save the JSON file in this directory
+4. **Deploy**: Run `python deploy_bcm_air.py --topology topologies/your-topology.json`
 
-**Workflow:**
-1. Write your topology in DOT format (human-readable)
-2. Convert to JSON using the converter script
-3. Deploy using the generated JSON file
+### Design Requirements
 
-### Using the Topology Converter
+See `topologies/topology-design.md` for full requirements. Key points:
 
-```bash
-# Convert DOT to JSON (auto-names output as .json)
-python scripts/topology_converter.py topologies/my-lab.dot
+1. **BCM Node Must Connect to "outbound"**: The BCM head node must have an interface connected to `"outbound"` for SSH access
+2. **BCM Node Naming**: Node name must start with `bcm` (e.g., `bcm-01`, `bcm-headnode`)
+3. **Disable OOB (Recommended)**: Set `"oob": false` to have full control over all interfaces
 
-# Specify output file
-python scripts/topology_converter.py topologies/my-lab.dot -o topologies/my-lab.json
+### Example Link to "outbound"
 
-# Set custom BCM MAC address (for license consistency)
-python scripts/topology_converter.py topologies/my-lab.dot --bcm-mac 48:b0:2d:00:00:00
+In your JSON topology, ensure the BCM node has a link like:
+
+```json
+[
+    {
+        "interface": "eth4",
+        "node": "bcm-01",
+        "mac": "48:b0:2d:a4:dc:c1"
+    },
+    "outbound"
+]
 ```
 
-The converter automatically:
-- ✅ Disables OOB globally and on all nodes
-- ✅ Detects BCM node and adds `eth0 → outbound` connection
-- ✅ Sets static MAC address on BCM node (for license consistency)
-- ✅ Preserves all node attributes including `mgmt_ip`
+The script auto-detects this interface and creates the SSH service on it.
 
-### BCM Node Naming Requirements
+### Static MAC Address for Licensing
 
-**The script will automatically detect your BCM node if it:**
-- Starts with `bcm` (case-insensitive)
-- Examples: `bcm-01`, `bcm-headnode0`, `bcm-primary`, `bcm01`, `bcm_head_01`
-
-**If multiple BCM nodes exist** (for future HA scenarios):
-- The script selects the node with the **lowest number** as the primary
-- Example: In a topology with `bcm-01` and `bcm-02`, `bcm-01` is automatically selected
-
-### Topology File Guidelines
-
-1. **File Format**: Use GraphViz DOT format (`.dot` extension)
-
-2. **BCM Node Requirements**:
-   ```dot
-   "bcm-01" [memory="4096" os="generic/ubuntu2404" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
-   ```
-   - **Required**: Node name starting with `bcm`
-   - **Recommended**: `memory="4096"` (minimum for BCM)
-   - **Recommended**: `storage="200"` (200GB for BCM data)
-   - **Recommended**: `mgmt_ip` for predictable OOB IP address
-
-3. **Interface Naming**:
-   - In DOT format, use `eth1`, `eth2`, etc. for data plane connections
-   - The converter will automatically add `bcm-01:eth0 → outbound` for SSH access
-   - Example:
-     ```dot
-     "bcm-01":"eth1" -- "leaf01":"swp5"
-     "bcm-01":"eth2" -- "leaf02":"swp5"
-     ```
-
-4. **Network Nodes** (compute servers, switches):
-   - Add `mgmt_ip` for OOB management IP addressing
-   - Use `os="pxe"` and `boot="network"` for PXE boot nodes
-   - Example:
-     ```dot
-     "compute0" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="20" mgmt_ip="192.168.200.14"]
-     ```
-
-### Example Custom Topology
-
-Create a new file in `topologies/my-lab.dot`:
-
-```dot
-graph "my-bcm-lab" {
-  // BCM Head Node (automatically detected)
-  "bcm-primary" [memory="4096" os="generic/ubuntu2404" cpu="2" cpu_mode="host-model" storage="200" mgmt_ip="192.168.200.254"]
-  
-  // Compute Nodes
-  "node01" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="50" mgmt_ip="192.168.200.101"]
-  "node02" [function="server" memory="2048" os="pxe" cpu="2" boot="network" storage="50" mgmt_ip="192.168.200.102"]
-  
-  // Network Switches
-  "spine01" [function="spine" memory="2048" os="cumulus-vx-5.14.0" cpu="2" mgmt_ip="192.168.200.11"]
-  "leaf01" [function="leaf" memory="4096" os="cumulus-vx-5.14.0" cpu="3" mgmt_ip="192.168.200.21"]
-  
-  // Connections (avoid eth0, it's reserved for OOB)
-  "bcm-primary":"eth1" -- "leaf01":"swp1"
-  "node01":"eth1" -- "leaf01":"swp2"
-  "node02":"eth1" -- "leaf01":"swp3"
-  "leaf01":"swp51" -- "spine01":"swp1"
-}
-```
+BCM licenses are bound to MAC addresses. Keep the MAC address on your BCM node's outbound interface consistent across topology rebuilds to maintain license validity.
 
 ### Using Your Custom Topology
 
 ```bash
-# Step 1: Convert DOT to JSON
-python scripts/topology_converter.py topologies/my-lab.dot
+# Deploy with custom topology
+python deploy_bcm_air.py --topology topologies/my-topology.json
 
-# Step 2: Deploy with the generated JSON
-python deploy_bcm_air.py --topology topologies/my-lab.json
-
-# Or with internal Air site
-python deploy_bcm_air.py --internal --topology topologies/my-lab.json
+# With internal Air site
+python deploy_bcm_air.py --internal --topology topologies/my-topology.json
 ```
 
 ### Validation
 
-The script will:
-1. ✅ Automatically detect your BCM node (e.g., `bcm-primary`)
-2. ✅ Validate that at least one BCM node exists
-3. ✅ Select the primary node if multiple BCM nodes are present
-4. ✅ Display the detected node name during deployment
-
-If validation fails, you'll see a clear error message with guidance.
-
-### Tips for Custom Topologies
-
-- **Start simple**: Begin with the default `test-bcm.dot` and modify incrementally
-- **Test topology syntax**: Use GraphViz tools to visualize before deployment
-- **Plan IP addressing**: Keep BCM on `192.168.200.254` for consistency
-- **Memory for Cumulus**: Cumulus VX 5.14.0 requires minimum 4096MB RAM
-- **Future HA support**: Name additional BCM nodes sequentially (`bcm-01`, `bcm-02`)
+The script validates:
+- ✅ BCM node exists (name starts with `bcm`)
+- ✅ BCM node has an interface connected to `"outbound"`
+- ✅ Topology is in JSON format
 
 ## Next Steps: Device Onboarding
 
@@ -785,18 +714,16 @@ bcm-in-nvidia-air/
 ├── scripts/                       # All scripts (installation, ZTP, testing)
 │   ├── bcm_install.sh             # BCM installation script (runs on head node)
 │   ├── cumulus-ztp.sh             # Cumulus switch ZTP script
-│   ├── topology_converter.py      # Convert DOT topologies to JSON
 │   ├── check_setup.py             # Setup verification helper
 │   ├── check_sim_state.py         # Debug simulation state
 │   ├── test_sdk_auth.py           # SDK authentication test
 │   ├── test_direct_auth.py        # Direct API authentication test
 │   └── test_auth.sh               # Shell-based auth test
 │
-│
-├── topologies/                    # Network topology templates
-│   ├── test-bcm.dot               # Default BCM lab topology (DOT format)
-│   ├── test-bcm.json              # Default BCM lab topology (JSON format)
-│   └── simple-bcm.dot             # Simplified topology example
+├── topologies/                    # Network topology files (JSON format)
+│   ├── default.json               # Default BCM lab topology
+│   ├── test-bcm.json              # Minimal test topology
+│   └── topology-design.md         # Design requirements documentation
 │
 │
 ├── pyproject.toml                 # Project metadata and dependencies (uv)

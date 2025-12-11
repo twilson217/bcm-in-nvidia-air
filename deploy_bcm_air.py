@@ -366,62 +366,6 @@ class AirBCMDeployer:
         
         return cloudinit_path
     
-    def read_dot_file(self, dot_file_path):
-        """Read and return the contents of the .dot topology file"""
-        with open(dot_file_path, 'r') as f:
-            return f.read()
-    
-    def detect_bcm_nodes(self, dot_content):
-        """
-        Detect BCM node(s) from the topology file.
-        Looks for nodes named like 'bcm-01', 'bcm-02', 'bcm-headnode0', etc.
-        Returns the primary BCM node (lowest number if multiple exist).
-        
-        Args:
-            dot_content: String content of the DOT file
-            
-        Returns:
-            String name of the primary BCM node
-            
-        Raises:
-            Exception if no BCM node is found
-        """
-        import re
-        
-        # Pattern to match node definitions: "node-name" [attributes]
-        node_pattern = r'"([^"]+)"\s*\['
-        
-        # Find all node names
-        nodes = re.findall(node_pattern, dot_content)
-        
-        # Filter for BCM nodes (start with 'bcm' or 'bcm-')
-        bcm_nodes = []
-        for node in nodes:
-            # Match patterns like: bcm-01, bcm-headnode0, bcm01, bcm-head-01, etc.
-            if re.match(r'^bcm[-_]?', node, re.IGNORECASE):
-                bcm_nodes.append(node)
-        
-        if not bcm_nodes:
-            raise Exception(
-                "No BCM node found in topology file.\n"
-                "Expected a node starting with 'bcm' (e.g., 'bcm-01', 'bcm-headnode0').\n"
-                "See README for topology file guidelines."
-            )
-        
-        # If multiple BCM nodes, sort and pick the one with lowest number
-        if len(bcm_nodes) > 1:
-            # Extract numbers from node names and sort
-            def get_node_number(name):
-                numbers = re.findall(r'\d+', name)
-                return int(numbers[0]) if numbers else 999
-            
-            bcm_nodes.sort(key=get_node_number)
-            print(f"\n  ℹ Multiple BCM nodes detected: {', '.join(bcm_nodes)}")
-            print(f"  ℹ Using primary node: {bcm_nodes[0]}")
-        
-        self.bcm_node_name = bcm_nodes[0]
-        return bcm_nodes[0]
-    
     def detect_bcm_nodes_json(self, nodes_dict):
         """
         Detect BCM node(s) from a JSON topology nodes dictionary.
@@ -464,6 +408,43 @@ class AirBCMDeployer:
         
         self.bcm_node_name = bcm_nodes[0]
         return bcm_nodes[0]
+    
+    def detect_bcm_outbound_interface(self, topology_data):
+        """
+        Detect which interface on the BCM node connects to "outbound".
+        This interface will be used for SSH service.
+        
+        Args:
+            topology_data: Parsed JSON topology data
+            
+        Returns:
+            Interface name (e.g., 'eth0', 'eth4') or None if not found
+        """
+        links = topology_data.get('content', {}).get('links', [])
+        
+        for link in links:
+            if len(link) != 2:
+                continue
+            
+            # Check if this link connects BCM node to "outbound"
+            endpoint1 = link[0]
+            endpoint2 = link[1]
+            
+            # endpoint can be a dict {"interface": "eth4", "node": "bcm-01"} or string "outbound"
+            if isinstance(endpoint1, dict) and endpoint2 == "outbound":
+                if endpoint1.get('node') == self.bcm_node_name:
+                    iface = endpoint1.get('interface')
+                    print(f"  ✓ BCM outbound interface detected: {self.bcm_node_name}:{iface}")
+                    return iface
+            
+            if isinstance(endpoint2, dict) and endpoint1 == "outbound":
+                if endpoint2.get('node') == self.bcm_node_name:
+                    iface = endpoint2.get('interface')
+                    print(f"  ✓ BCM outbound interface detected: {self.bcm_node_name}:{iface}")
+                    return iface
+        
+        print(f"  ⚠ No outbound interface found for {self.bcm_node_name}")
+        return None
     
     def get_next_simulation_name(self):
         """
@@ -547,10 +528,10 @@ class AirBCMDeployer:
     
     def create_simulation(self, topology_file_path, simulation_name):
         """
-        Create a simulation from a topology file (.dot or .json)
+        Create a simulation from a JSON topology file.
         
         Args:
-            topology_file_path: Path to the topology file (.dot or .json)
+            topology_file_path: Path to the JSON topology file
             simulation_name: Name for the simulation
         
         Returns:
@@ -563,40 +544,36 @@ class AirBCMDeployer:
         topology_path = Path(topology_file_path)
         file_ext = topology_path.suffix.lower()
         
-        # Prepare payload based on file format
-        if file_ext == '.json':
-            # JSON format - read and parse
-            with open(topology_path, 'r') as f:
-                topology_data = json.load(f)
-            
-            # Detect BCM node from JSON topology
-            nodes = topology_data.get('content', {}).get('nodes', {})
-            bcm_node = self.detect_bcm_nodes_json(nodes)
-            print(f"\n  ✓ Detected BCM node: {bcm_node}")
-            
-            print(f"\nCreating simulation from JSON file: {simulation_name}")
-            
-            # Override title with our simulation name
-            topology_data['title'] = simulation_name
-            payload = topology_data
-            content_size = len(json.dumps(topology_data))
-            
-        else:
-            # DOT format (default)
-            dot_content = self.read_dot_file(topology_file_path)
-            
-            # Detect BCM node from DOT topology
-            bcm_node = self.detect_bcm_nodes(dot_content)
-            print(f"\n  ✓ Detected BCM node: {bcm_node}")
-            
-            print(f"\nCreating simulation from DOT file: {simulation_name}")
-            
-            payload = {
-                'format': 'DOT',
-                'title': simulation_name,
-                'content': dot_content,
-            }
-            content_size = len(dot_content)
+        if file_ext != '.json':
+            raise Exception(
+                f"Only JSON topology files are supported.\n"
+                "Create custom topologies in NVIDIA Air web UI and export to JSON.\n"
+                "See topologies/topology-design.md for requirements."
+            )
+        
+        # JSON format - read and parse
+        with open(topology_path, 'r') as f:
+            topology_data = json.load(f)
+        
+        # Detect BCM node from JSON topology
+        nodes = topology_data.get('content', {}).get('nodes', {})
+        bcm_node = self.detect_bcm_nodes_json(nodes)
+        print(f"\n  ✓ Detected BCM node: {bcm_node}")
+        
+        # Detect which interface connects to outbound (for SSH service)
+        self.bcm_outbound_interface = self.detect_bcm_outbound_interface(topology_data)
+        if not self.bcm_outbound_interface:
+            raise Exception(
+                f"BCM node '{bcm_node}' must have an interface connected to 'outbound' for SSH access.\n"
+                "See topologies/topology-design.md for requirements."
+            )
+        
+        print(f"\nCreating simulation from JSON file: {simulation_name}")
+        
+        # Override title with our simulation name
+        topology_data['title'] = simulation_name
+        payload = topology_data
+        content_size = len(json.dumps(topology_data))
         
         try:
             response = requests.post(
@@ -870,19 +847,19 @@ class AirBCMDeployer:
     def enable_ssh_service(self):
         """
         Enable SSH service for the simulation using the Air SDK.
-        Creates an SSH service directly on the BCM head node (eth0 port 22).
+        Creates an SSH service on the BCM head node's outbound interface.
         
-        Note: When using JSON format with oob:false, eth0 can be connected
-        to "outbound" for direct external access.
-        
-        This allows direct SSH access to BCM without going through oob-mgmt-server,
-        which avoids password configuration issues with Air-managed nodes.
+        The outbound interface is detected from the topology during simulation creation.
+        This interface must be connected to "outbound" in the topology for external access.
         
         Returns:
             Service object if successful, None otherwise
         """
+        # Use detected outbound interface, or fall back to eth0
+        interface = getattr(self, 'bcm_outbound_interface', 'eth0')
+        
         print("\nEnabling SSH service for simulation...")
-        print(f"  Creating SSH service on {self.bcm_node_name}:eth0...")
+        print(f"  Creating SSH service on {self.bcm_node_name}:{interface}...")
         
         try:
             from air_sdk import AirApi
@@ -897,12 +874,11 @@ class AirBCMDeployer:
             # Get the simulation object
             sim = air.simulations.get(self.simulation_id)
             
-            # Create SSH service directly on BCM head node
-            # eth0 is connected to "outbound" for external access
-            # (requires JSON topology with oob:false)
+            # Create SSH service on BCM head node's outbound interface
+            # This interface must be connected to "outbound" in the topology
             service = sim.create_service(
                 name='bcm-ssh',
-                interface=f'{self.bcm_node_name}:eth0',
+                interface=f'{self.bcm_node_name}:{interface}',
                 dest_port=22,
                 service_type='ssh'
             )
@@ -1609,10 +1585,10 @@ Examples:
         help='Use internal NVIDIA Air site (air-inside.nvidia.com)'
     )
     parser.add_argument(
-        '--topology', '--dot-file',
+        '--topology',
         dest='topology_file',
-        default='topologies/test-bcm.json',
-        help='Path to topology file (.json or .dot). JSON format supports oob:false. (default: topologies/test-bcm.json)'
+        default='topologies/default.json',
+        help='Path to JSON topology file. Create custom topologies in NVIDIA Air web UI and export to JSON. (default: topologies/default.json)'
     )
     parser.add_argument(
         '--name',
@@ -1749,7 +1725,9 @@ Examples:
         if args.resume and progress.is_step_completed('simulation_created'):
             deployer.simulation_id = progress.get('simulation_id')
             deployer.bcm_node_name = progress.get('bcm_node_name', 'bcm-01')
+            deployer.bcm_outbound_interface = progress.get('bcm_outbound_interface', 'eth0')
             print(f"  [resume] Simulation ID: {deployer.simulation_id}")
+            print(f"  [resume] BCM outbound interface: {deployer.bcm_outbound_interface}")
         else:
             topology_file = Path(args.topology_file)
             if not topology_file.exists():
@@ -1760,7 +1738,8 @@ Examples:
             progress.complete_step('simulation_created', 
                                    simulation_id=deployer.simulation_id,
                                    simulation_name=simulation_name,
-                                   bcm_node_name=deployer.bcm_node_name)
+                                   bcm_node_name=deployer.bcm_node_name,
+                                   bcm_outbound_interface=deployer.bcm_outbound_interface)
         
         # Step: Configure cloud-init
         if args.resume and progress.is_step_completed('cloudinit_configured'):
