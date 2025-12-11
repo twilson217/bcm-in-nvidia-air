@@ -139,7 +139,7 @@ class TopologyValidator:
         return False
     
     def validate_bcm_outbound(self, bcm_node):
-        """Validate BCM node has outbound connection"""
+        """Validate BCM node has outbound connection on eth0"""
         connections = self.find_node_connections(bcm_node)
         
         outbound_iface = None
@@ -155,7 +155,16 @@ class TopologyValidator:
             )
             return None
         
-        self.info.append(f"BCM outbound interface: {bcm_node}:{outbound_iface}")
+        # CRITICAL: eth0 must be the outbound interface due to NVIDIA Air's netplan
+        if outbound_iface != 'eth0':
+            self.errors.append(
+                f"BCM outbound interface must be 'eth0', but found '{outbound_iface}'\n"
+                f"   NVIDIA Air's 40-air.yaml netplan only configures eth0 for DHCP.\n"
+                f"   Using other interfaces causes hostname and IP assignment failures."
+            )
+            return outbound_iface
+        
+        self.info.append(f"BCM outbound interface: {bcm_node}:{outbound_iface} (correct)")
         return outbound_iface
     
     def validate_bcm_management(self, bcm_node):
