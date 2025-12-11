@@ -479,6 +479,64 @@ class AirBCMDeployer:
         print(f"  ⚠ No oob-mgmt-switch connection found for {self.bcm_node_name}")
         return None
     
+    def _get_topology_nodes(self):
+        """
+        Get node configurations from the loaded topology.
+        Returns dict of node_name -> node_config, or None if not available.
+        """
+        return getattr(self, '_topology_nodes_cache', None)
+    
+    def _cache_topology_nodes(self, topology_data):
+        """Cache topology node configurations for later use"""
+        self._topology_nodes_cache = topology_data.get('content', {}).get('nodes', {})
+    
+    def _is_pxe_boot_node(self, node_name, topo_node):
+        """
+        Determine if a node is configured for PXE boot (as a client).
+        
+        Detection criteria (in order of reliability):
+        1. "boot": "network" - explicitly set to network boot
+        2. "os" contains "pxe" - OS is a PXE boot image
+        
+        Note: "pxehost" indicates if the node is a PXE SERVER, not client.
+        """
+        # Check for explicit network boot setting
+        if topo_node.get('boot') == 'network':
+            return True
+        
+        # Check for PXE OS
+        node_os = topo_node.get('os', '')
+        if isinstance(node_os, str) and 'pxe' in node_os.lower():
+            return True
+        
+        return False
+    
+    def _is_switch_node(self, node_name, topo_node):
+        """
+        Determine if a node is a network switch.
+        
+        Detection criteria:
+        1. function attribute (leaf, spine, switch)
+        2. OS contains cumulus, sonic, or switch
+        3. Name patterns (leaf, spine, switch, tor, agg)
+        """
+        # Check function attribute
+        function = topo_node.get('function', '').lower()
+        if function in ['leaf', 'spine', 'switch', 'oob-switch']:
+            return True
+        
+        # Check OS for switch indicators
+        node_os = topo_node.get('os', '').lower()
+        if any(x in node_os for x in ['cumulus', 'sonic', 'switch']):
+            return True
+        
+        # Check name patterns as fallback
+        name_lower = node_name.lower()
+        if any(x in name_lower for x in ['leaf', 'spine', 'switch', 'tor', 'agg']):
+            return True
+        
+        return False
+    
     def get_next_simulation_name(self):
         """
         Generate the next simulation name following the pattern YYYYMMNNN-BCM-Lab
@@ -592,6 +650,9 @@ class AirBCMDeployer:
         nodes = topology_data.get('content', {}).get('nodes', {})
         bcm_node = self.detect_bcm_nodes_json(nodes)
         print(f"\n  ✓ Detected BCM node: {bcm_node}")
+        
+        # Cache topology nodes for later PXE/switch detection
+        self._cache_topology_nodes(topology_data)
         
         # Detect which interface connects to outbound (for SSH service)
         self.bcm_outbound_interface = self.detect_bcm_outbound_interface(topology_data)
@@ -1053,35 +1114,26 @@ class AirBCMDeployer:
             nodes = air.simulation_nodes.list(simulation=self.simulation_id)
             
             # Apply cloud-init to Ubuntu/Debian nodes that support it
-            # Skip switches, PXE boot nodes, and compute nodes
+            # Skip switches and PXE boot nodes (detected by settings, not names)
             configured_count = 0
             skipped_nodes = []
             
+            # Load topology to get node configurations
+            topology_nodes = self._get_topology_nodes() or {}
+            
             for node in nodes:
                 node_name = node.name
+                topo_node = topology_nodes.get(node_name, {})
                 
-                # Skip switches (they don't support cloud-init)
-                if any(skip in node_name.lower() for skip in ['leaf', 'spine', 'switch']):
+                # Check if node is a switch (by OS or function)
+                if self._is_switch_node(node_name, topo_node):
                     skipped_nodes.append((node_name, 'switch'))
                     continue
                 
-                # Skip compute/cpu nodes (typically PXE boot)
-                # Matches: compute0, compute1, compute-01, cpu-01, node01, etc.
-                if re.match(r'^(compute|cpu|node)[-_]?\d+', node_name.lower()):
-                    skipped_nodes.append((node_name, 'PXE boot (compute node)'))
+                # Check if node is a PXE boot client (by boot setting or OS)
+                if self._is_pxe_boot_node(node_name, topo_node):
+                    skipped_nodes.append((node_name, 'PXE boot'))
                     continue
-                
-                # Skip nodes that are likely PXE boot (check OS if available)
-                try:
-                    node_os = getattr(node, 'os', '') or ''
-                    if 'pxe' in node_os.lower():
-                        skipped_nodes.append((node_name, 'PXE boot'))
-                        continue
-                    if 'cumulus' in node_os.lower():
-                        skipped_nodes.append((node_name, 'Cumulus'))
-                        continue
-                except:
-                    pass
                 
                 print(f"  Applying cloud-init to {node_name}...")
                 
