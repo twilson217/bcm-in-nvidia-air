@@ -1458,8 +1458,6 @@ send "echo '$default_pass' | sudo -S bash -c \\"echo 'root:$new_pass' | chpasswd
 expect "\\$"
 send "echo '$default_pass' | sudo -S sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config\\r"
 expect "\\$"
-send "echo '$default_pass' | sudo -S systemctl restart ssh\\r"
-expect "\\$"
 puts "  ✓ Root SSH access enabled"
 
 # Add SSH key for root too
@@ -1472,6 +1470,13 @@ if {{ $pubkey ne "" }} {{
     expect "\\$"
     puts "  ✓ Root SSH key added"
 }}
+
+# Restart SSH service and wait for it to be ready
+send "echo '$default_pass' | sudo -S systemctl restart ssh\\r"
+expect "\\$"
+puts "  ⏳ Waiting for SSH service to restart..."
+send "sleep 5\\r"
+expect "\\$"
 
 send "exit\\r"
 expect eof
@@ -1665,9 +1670,30 @@ Host bcm
         print(f"  Source: {iso_path}")
         print(f"  This may take 10-20 minutes depending on connection speed...")
         
-        # Wait a moment for SSH service to stabilize
+        # Wait for SSH service to stabilize after potential restart
         print(f"  Waiting for SSH service to stabilize...")
-        time.sleep(10)
+        time.sleep(15)
+        
+        # Verify SSH key authentication works before attempting rsync
+        print(f"  Verifying SSH key authentication...")
+        ssh_test_cmd = [
+            'ssh', '-F', str(ssh_config_file),
+            '-o', 'BatchMode=yes',  # Fail if password required
+            '-o', 'ConnectTimeout=10',
+            f'air-{self.bcm_node_name}',
+            'echo SSH_KEY_AUTH_OK'
+        ]
+        try:
+            test_result = subprocess.run(ssh_test_cmd, capture_output=True, text=True, timeout=30)
+            if 'SSH_KEY_AUTH_OK' in test_result.stdout:
+                print(f"  ✓ SSH key authentication verified")
+            else:
+                print(f"  ⚠ SSH key auth may not be working, will try anyway...")
+                print(f"    stdout: {test_result.stdout[:100] if test_result.stdout else 'empty'}")
+                print(f"    stderr: {test_result.stderr[:100] if test_result.stderr else 'empty'}")
+        except Exception as e:
+            print(f"  ⚠ Could not verify SSH key auth: {e}")
+            print(f"  ⚠ Continuing anyway - rsync may prompt for password")
         
         # Use rsync for reliable large file transfer
         # Upload to /home/ubuntu/ since we connect as ubuntu user
@@ -1769,6 +1795,56 @@ Host bcm
             print(f"\n✗ Script upload failed: {e}")
             return False
     
+    def upload_ansible_installer(self, ssh_config_file):
+        """
+        Upload the bcm-ansible-installer submodule directory to the head node
+        
+        Args:
+            ssh_config_file: Path to SSH config file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        print(f"\n📦 Uploading bcm-ansible-installer directory...")
+        
+        # Find the submodule directory (relative to this script)
+        installer_dir = Path(__file__).parent / 'bcm-ansible-installer'
+        if not installer_dir.exists():
+            print(f"\n✗ bcm-ansible-installer submodule not found at {installer_dir}")
+            print(f"  Please ensure the submodule is initialized:")
+            print(f"    git submodule update --init")
+            return False
+        
+        # Use rsync to upload the directory
+        ssh_cmd = f"ssh -F {ssh_config_file} -o StrictHostKeyChecking=no"
+        remote_path = f"air-{self.bcm_node_name}:/home/ubuntu/"
+        
+        cmd = [
+            'rsync',
+            '-avz',
+            '--delete',           # Ensure clean copy
+            '-e', ssh_cmd,
+            str(installer_dir) + '/',  # Trailing slash to copy contents
+            f"air-{self.bcm_node_name}:/home/ubuntu/bcm-ansible-installer/"
+        ]
+        
+        try:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=False,
+                text=True
+            )
+            print(f"  ✓ bcm-ansible-installer uploaded")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n✗ Ansible installer upload failed: {e}")
+            return False
+        except FileNotFoundError:
+            print(f"\n✗ rsync not found. Please install rsync:")
+            print(f"    sudo apt-get install rsync")
+            return False
+    
     def execute_bcm_install(self, ssh_config_file):
         """
         Execute BCM installation script on the head node
@@ -1841,11 +1917,15 @@ Host bcm
         if not self.upload_iso_to_bcm(iso_path, ssh_config_file):
             raise RuntimeError("Failed to upload BCM ISO")
         
-        # Step 3: Upload install script
+        # Step 3: Upload ansible installer submodule
+        if not self.upload_ansible_installer(ssh_config_file):
+            raise RuntimeError("Failed to upload bcm-ansible-installer")
+        
+        # Step 4: Upload install script
         if not self.upload_install_script(bcm_version, ssh_config_file):
             raise RuntimeError("Failed to upload installation script")
         
-        # Step 4: Execute installation
+        # Step 5: Execute installation
         if not self.execute_bcm_install(ssh_config_file):
             raise RuntimeError("BCM installation failed")
     

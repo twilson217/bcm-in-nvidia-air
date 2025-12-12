@@ -55,7 +55,7 @@ python scripts/topology_validation.py topologies/*.json  # Validate multiple
 1. Disables unattended upgrades
 2. Installs system dependencies (Python, MySQL, etc.)
 3. Secures MySQL installation
-4. Clones [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer)
+4. Uses bcm-ansible-installer (uploaded from submodule during deployment)
 5. Installs Bright Computing Ansible Galaxy collection
 6. Generates configuration files (`cluster-settings.yml`, `cluster-credentials.yml`)
 7. Runs the BCM Ansible playbook

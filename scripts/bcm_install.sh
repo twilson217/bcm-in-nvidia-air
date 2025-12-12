@@ -83,12 +83,13 @@ if [ ! -f "$BCM_ISO_PATH" ]; then
 fi
 echo "  ✓ ISO found at $BCM_ISO_PATH (Ansible will handle mounting)"
 
-# Step 6: Clone BCM Ansible installer
+# Step 6: Set up BCM Ansible installer (uploaded as part of deployment)
 echo "[Step 6/10] Setting up BCM Ansible installer..."
-if [ -d /home/ubuntu/bcm-ansible-installer ]; then
-    rm -rf /home/ubuntu/bcm-ansible-installer
+if [ ! -d /home/ubuntu/bcm-ansible-installer ]; then
+    echo "  ✗ ERROR: bcm-ansible-installer directory not found at /home/ubuntu/bcm-ansible-installer"
+    echo "  This directory should have been uploaded during deployment."
+    exit 1
 fi
-git clone https://github.com/twilson217/bcm-ansible-installer.git /home/ubuntu/bcm-ansible-installer
 cd /home/ubuntu/bcm-ansible-installer
 
 # Fix playbook to use correct BCM version role
