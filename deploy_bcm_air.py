@@ -1249,27 +1249,53 @@ class AirBCMDeployer:
         temp_cloudinit.write_text(cloudinit_content)
         
         try:
-            # Initialize Air SDK
-            print("  Connecting to Air SDK...")
-            air = AirApi(
-                username=self.username,
-                password=self.api_token,
-                api_url=self.api_base_url
-            )
-            
-            # Create the cloud-init user-data script
+            # Create the cloud-init user-data script using raw API
+            # Note: SDK omits None values, but API requires organization field to be present (even if null)
             print("  Creating cloud-init user-data script...")
             userdata_name = f"bcm-password-config-{self.simulation_id[:8]}"
             
+            headers = {
+                "Authorization": f"Bearer {self.jwt_token}",
+                "Content-Type": "application/json"
+            }
+            
+            # API requires organization field to be explicitly present (can be null)
+            payload = {
+                "name": userdata_name,
+                "kind": "cloud-init-user-data",
+                "organization": None,  # Must be explicitly sent, not omitted
+                "content": cloudinit_content
+            }
+            
+            userdata_id = None
             try:
-                # Create new UserConfig for cloud-init
-                userdata = air.user_configs.create(
-                    name=userdata_name,
-                    kind='cloud-init-user-data',
-                    organization=None,  # Personal config
-                    content=str(temp_cloudinit)
+                response = requests.post(
+                    f"{self.api_base_url}/api/v2/userconfigs/",
+                    headers=headers,
+                    json=payload,
+                    timeout=30
                 )
-                print(f"    ✓ Created UserConfig: {userdata.id}")
+                
+                if response.status_code == 201:
+                    userdata_id = response.json().get('id')
+                    print(f"    ✓ Created UserConfig: {userdata_id}")
+                elif response.status_code == 400 and 'name' in response.text.lower() and 'already' in response.text.lower():
+                    # Config with same name exists, find it
+                    print(f"    ℹ UserConfig with this name may already exist, searching...")
+                    list_response = requests.get(
+                        f"{self.api_base_url}/api/v2/userconfigs/",
+                        headers=headers,
+                        timeout=30
+                    )
+                    if list_response.status_code == 200:
+                        for cfg in list_response.json().get('results', []):
+                            if cfg.get('name') == userdata_name:
+                                userdata_id = cfg.get('id')
+                                print(f"    ℹ Using existing UserConfig: {userdata_id}")
+                                break
+                else:
+                    raise Exception(f"API returned {response.status_code}: {response.text}")
+                    
             except Exception as e:
                 error_str = str(e).lower()
                 print(f"    ⚠ Error creating UserConfig: {e}")
@@ -1280,23 +1306,19 @@ class AirBCMDeployer:
                     print(f"    ℹ Cloud-init/UserConfig may require a paid subscription")
                     print(f"    ℹ The script will continue with default passwords")
                     return False
-                
-                # Try to get existing one with same name
-                try:
-                    configs = air.user_configs.list()
-                    for cfg in configs:
-                        if cfg.name == userdata_name:
-                            userdata = cfg
-                            print(f"    ℹ Using existing UserConfig: {userdata.id}")
-                            break
-                    else:
-                        raise Exception("Could not create or find UserConfig")
-                except Exception as list_err:
-                    print(f"    ⚠ Could not list UserConfigs: {list_err}")
-                    if '403' in str(list_err) or 'forbidden' in str(list_err).lower():
-                        print(f"\n    ℹ UserConfig API appears to be restricted for this account")
-                        print(f"    ℹ This is likely a free tier limitation on air.nvidia.com")
-                    return False
+                raise
+            
+            if not userdata_id:
+                print(f"    ⚠ Could not create or find UserConfig")
+                return False
+            
+            # Initialize Air SDK for node operations
+            print("  Connecting to Air SDK...")
+            air = AirApi(
+                username=self.username,
+                password=self.api_token,
+                api_url=self.api_base_url
+            )
             
             # Get simulation nodes
             print("  Getting simulation nodes...")
@@ -1328,8 +1350,8 @@ class AirBCMDeployer:
                 print(f"  Applying cloud-init to {node_name}...")
                 
                 try:
-                    # SDK expects a dictionary with 'user_data' key, not keyword args
-                    node.set_cloud_init_assignment({'user_data': userdata})
+                    # SDK expects a dictionary with 'user_data' key containing the config ID
+                    node.set_cloud_init_assignment({'user_data': userdata_id})
                     print(f"    ✓ Cloud-init assigned to {node_name}")
                     configured_count += 1
                 except Exception as e:

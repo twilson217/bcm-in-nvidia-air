@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script to reproduce UserConfig API access issue on air.nvidia.com free tier.
-The API returns "Access Denied" when trying to create or list UserConfigs.
+Test script to reproduce UserConfig API access issue on air.nvidia.com.
+The API requires an 'organization' field even for personal accounts.
 
 Usage:
     # Set environment variables (or use .env file)
@@ -71,41 +71,97 @@ headers = {
     "Content-Type": "application/json"
 }
 
+# Step 2: Check user's organizations
+print("\n" + "=" * 60)
+print("Step 2: GET /api/v2/organizations/ (check user's orgs)")
+print("=" * 60)
+response = requests.get(f"{API_URL}/api/v2/organizations/", headers=headers)
+print(f"Status: {response.status_code}")
+orgs = []
+if response.status_code == 200:
+    data = response.json()
+    orgs = data.get('results', [])
+    print(f"Organizations found: {len(orgs)}")
+    for org in orgs:
+        print(f"  - {org.get('name')} (id: {org.get('id')})")
+else:
+    print(f"Response: {response.text[:300]}")
+
+# Step 3: Check organization memberships
+print("\n" + "=" * 60)
+print("Step 3: GET /api/v2/organization-memberships/")
+print("=" * 60)
+response = requests.get(f"{API_URL}/api/v2/organization-memberships/", headers=headers)
+print(f"Status: {response.status_code}")
+if response.status_code == 200:
+    data = response.json()
+    memberships = data.get('results', [])
+    print(f"Memberships found: {len(memberships)}")
+    for mem in memberships:
+        print(f"  - Org: {mem.get('organization_name')}, Admin: {mem.get('is_org_admin')}")
+else:
+    print(f"Response: {response.text[:300]}")
+
 # Test 1: Try to list UserConfigs
 print("\n" + "=" * 60)
 print("Test 1: GET /api/v2/userconfigs/")
 print("=" * 60)
 response = requests.get(f"{API_URL}/api/v2/userconfigs/", headers=headers)
 print(f"Status: {response.status_code}")
-print(f"Response: {response.text[:500]}")
+print(f"Response: {response.text[:300]}")
 
-# Test 2: Try to create a UserConfig
+# Test 2a: Try to create a UserConfig WITHOUT organization
 print("\n" + "=" * 60)
-print("Test 2: POST /api/v2/userconfigs/")
+print("Test 2a: POST /api/v2/userconfigs/ (no organization)")
 print("=" * 60)
 payload = {
-    "name": "test-cloud-init-config",
+    "name": "test-cloud-init-no-org",
     "kind": "cloud-init-user-data",
     "content": "#cloud-config\npassword: TestPassword123\nchpasswd:\n  expire: false"
 }
 response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
 print(f"Status: {response.status_code}")
-print(f"Response: {response.text[:500]}")
+print(f"Response: {response.text[:300]}")
 
-# Test 3: Verify other API endpoints work (simulations list)
+# Test 2b: Try with organization=null explicitly
 print("\n" + "=" * 60)
-print("Test 3: GET /api/v2/simulations/ (control - should work)")
+print("Test 2b: POST /api/v2/userconfigs/ (organization: null)")
 print("=" * 60)
-response = requests.get(f"{API_URL}/api/v2/simulations/", headers=headers)
+payload["organization"] = None
+response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
 print(f"Status: {response.status_code}")
-if response.status_code == 200:
-    data = response.json()
-    print(f"✓ Response: Found {data.get('count', 0)} simulations")
-else:
-    print(f"Response: {response.text[:200]}...")
+print(f"Response: {response.text[:300]}")
+
+# Test 2c: Try with empty string organization
+print("\n" + "=" * 60)
+print("Test 2c: POST /api/v2/userconfigs/ (organization: '')")
+print("=" * 60)
+payload["organization"] = ""
+payload["name"] = "test-cloud-init-empty-org"
+response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
+print(f"Status: {response.status_code}")
+print(f"Response: {response.text[:300]}")
+
+# Test 2d: If user has an org, try creating with it
+if orgs:
+    print("\n" + "=" * 60)
+    print(f"Test 2d: POST /api/v2/userconfigs/ (organization: {orgs[0].get('id')})")
+    print("=" * 60)
+    payload["organization"] = orgs[0].get('id')
+    payload["name"] = "test-cloud-init-with-org"
+    response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
+    print(f"Status: {response.status_code}")
+    print(f"Response: {response.text[:300]}")
+    
+    # Clean up if successful
+    if response.status_code == 201:
+        config_id = response.json().get('id')
+        print(f"  ✓ Created! Cleaning up...")
+        requests.delete(f"{API_URL}/api/v2/userconfigs/{config_id}/", headers=headers)
 
 print("\n" + "=" * 60)
 print("Summary:")
-print("- If Test 1 & 2 return 'Access Denied' but Test 3 works,")
-print("  this confirms UserConfig API is restricted for this account.")
+print("- UserConfig API requires 'organization' field")
+print("- If user has no organization, they cannot create UserConfigs")
+print("- This affects cloud-init configuration on air.nvidia.com")
 print("=" * 60)
