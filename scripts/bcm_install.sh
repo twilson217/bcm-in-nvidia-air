@@ -53,24 +53,41 @@ echo "  ✓ IPv4 forced for apt"
 # Step 3: Update system and install dependencies
 echo "[Step 3/10] Installing system dependencies..."
 apt-get update -qq
+
+# Upgrade all packages to latest versions (important for BCM 10.24.x compatibility)
+echo "  Upgrading system packages..."
+apt-get upgrade -y -qq
+
+# Fix any broken dependencies
+apt-get --fix-broken install -y -qq || true
+
 apt-get install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
 pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
 
 # Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x only)
 # libglapi-amber and libglapi-mesa are mutually exclusive
-# The BCM 10.24.x Ansible collection tries to install both, causing failure
+# The BCM 10.24.x ISO selection files require both, causing failure
 # BCM 10.30.0 and 11.x don't have this issue
 if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
     echo "  Applying Ubuntu 24.04 package conflict workaround for BCM ${BCM_FULL_VERSION}..."
+    
+    # Install the amber packages (what working BCM 10.30.0 uses)
     apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
-    # Pin libglapi-mesa to prevent it from being installed (apt preferences)
+    
+    # Pin libglapi-mesa to prevent installation (conflicts with amber)
     cat > /etc/apt/preferences.d/bcm-block-libglapi-mesa << 'PINEOF'
-# Block libglapi-mesa to avoid conflict with libglapi-amber (BCM 10.24.x requirement)
+# Block libglapi-mesa to avoid conflict with libglapi-amber (BCM 10.24.x)
 Package: libglapi-mesa
 Pin: release *
 Pin-Priority: -1
 PINEOF
+    
+    # Pre-install problematic packages without version constraints
+    # BCM 10.24.x ISO requires specific versions that may not exist in Ubuntu 24.04 repos
+    echo "  Pre-installing packages with version mismatches..."
+    apt-get install -y libxml2-dev libxslt1-dev libuser1 libicu-dev >/dev/null 2>&1 || true
+    
     echo "  ✓ Package conflict workaround applied"
 else
     echo "  ℹ BCM ${BCM_FULL_VERSION} - no package workaround needed"
