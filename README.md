@@ -21,12 +21,21 @@ This solution automates the complete BCM deployment process:
 - Reliable ISO upload with rsync (resume support)
 - Complete deployment in ~45-60 minutes (mostly unattended)
 
+**Tested BCM Versions:**
+| Version | ISO Filename | Status |
+|---------|--------------|--------|
+| BCM 11.0.0 | `bcm-11.0-ubuntu2404.iso` | ✓ Tested |
+| BCM 10.30.0 | `bcm-10.30.0-ubuntu2404.iso` | ✓ Tested |
+| BCM 10.24.03 | `bcm-10.24.03-ubuntu2404.iso` | ✓ Tested (with workaround) |
+
+> **Note:** BCM 10.24.x requires a workaround for an Ubuntu 24.04 package conflict (`libglapi-amber` vs `libglapi-mesa`). This is handled automatically by the install script.
+
 **External Dependencies:**
 - [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer100/) - Ansible Galaxy collection for BCM 10.x
 - [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer110/) - Ansible Galaxy collection for BCM 11.x
 
-**Included Submodule:**
-- [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) - Ansible scaffolding for BCM installation (cloned on remote host during install)
+**External Repository (cloned during install):**
+- [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) - Ansible scaffolding for BCM installation
 
 **Note on Free Tier:** The external air.nvidia.com site may have limitations on free accounts (e.g., cloud-init/UserConfig may not be available). The script includes fallback mechanisms for password and SSH key configuration.
 
