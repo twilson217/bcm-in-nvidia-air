@@ -1269,6 +1269,12 @@ class AirBCMDeployer:
             
             userdata_id = None
             try:
+                # Debug: show request details
+                if os.getenv('DEBUG'):
+                    print(f"    [DEBUG] POST {self.api_base_url}/api/v2/userconfigs/")
+                    print(f"    [DEBUG] Token: {self.jwt_token[:20]}...")
+                    print(f"    [DEBUG] Content size: {len(cloudinit_content)} bytes")
+                
                 response = requests.post(
                     f"{self.api_base_url}/api/v2/userconfigs/",
                     headers=headers,
