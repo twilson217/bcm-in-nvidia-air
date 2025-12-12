@@ -1532,9 +1532,6 @@ puts "\\n✓ BCM head node configured successfully"
             # Clean up
             expect_file = Path('/tmp/air_password_config.exp')
             expect_file.unlink(missing_ok=True)
-        except Exception as e:
-            print(f"  ⚠ Error configuring passwords: {e}")
-            return False
     
     def create_ssh_config(self, ssh_info, simulation_name):
         """
