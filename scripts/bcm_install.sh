@@ -139,6 +139,37 @@ export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
 ansible-galaxy collection install "${BCM_COLLECTION}" --force
 echo "  ✓ Collection installed: ${BCM_COLLECTION}"
 
+# For BCM 10.24.x: Create a dummy libglapi-mesa package to satisfy the dependency
+# The 10.24.x ISO selection files require libglapi-mesa, but it conflicts with libglapi-amber
+# We use equivs to create a dummy package that satisfies the requirement without installing the real thing
+if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
+    echo "  Creating dummy libglapi-mesa package for BCM ${BCM_FULL_VERSION}..."
+    apt-get install -y equivs >/dev/null 2>&1
+    
+    # Create control file for dummy package
+    mkdir -p /tmp/dummy-libglapi-mesa
+    cat > /tmp/dummy-libglapi-mesa/libglapi-mesa-dummy << 'CTRLEOF'
+Section: libs
+Priority: optional
+Standards-Version: 3.9.2
+
+Package: libglapi-mesa
+Version: 99.0.0
+Provides: libglapi-mesa
+Description: Dummy package to satisfy BCM 10.24.x dependency
+ This is a dummy package that provides libglapi-mesa without
+ actually installing it, to avoid conflicts with libglapi-amber
+ on Ubuntu 24.04.
+CTRLEOF
+    
+    # Build and install the dummy package
+    cd /tmp/dummy-libglapi-mesa
+    equivs-build libglapi-mesa-dummy >/dev/null 2>&1
+    dpkg -i libglapi-mesa_99.0.0_all.deb >/dev/null 2>&1 || true
+    cd - >/dev/null
+    echo "  ✓ Dummy libglapi-mesa package installed"
+fi
+
 # Step 8: Create configuration files
 echo "[Step 8/10] Creating BCM configuration..."
 
