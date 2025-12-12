@@ -4,6 +4,21 @@
 
 This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Network Topology](#network-topology)
+- [Project Structure](#project-structure)
+- [Creating Custom Topology Files](#creating-custom-topology-files)
+- [Next Steps: Device Onboarding](#next-steps-device-onboarding)
+- [Advanced Configuration](#advanced-configuration)
+- [Troubleshooting](#troubleshooting)
+- [Additional Resources](#additional-resources)
+- [Script Reference](#script-reference)
+- [Repository Structure](#repository-structure)
+- [How It Works](#how-it-works)
+
 ## Overview
 
 This solution automates the complete BCM deployment process:
@@ -721,26 +736,108 @@ bcm-in-nvidia-air/
 
 ## How It Works
 
-The deployment uses a two-phase approach:
+The deployment uses a three-phase approach spanning your local machine, the NVIDIA Air API, and the remote BCM head node.
 
-**Phase 1: Simulation Setup (your machine)**
-1. Creates NVIDIA Air simulation via API
-2. Attempts cloud-init for password/SSH key configuration
-   - Falls back to SSH-based configuration if cloud-init unavailable (free tier)
-3. Waits for simulation to load
-4. Enables SSH service on `bcm-01:eth0`
-5. Uploads BCM ISO via rsync (reliable, resumable)
-6. Uploads installation script with your credentials
+### What You Provide
 
-**Phase 2: BCM Installation (on head node)**
-1. Clones bcm-ansible-installer from GitHub
-2. Installs Ansible Galaxy collection (`brightcomputing.installer100` or `installer110`)
-3. Generates cluster credentials and network settings from topology
-4. Runs official BCM Ansible playbook locally
-5. Configures DNS, TFTP, and passwords
+- **NVIDIA Air account** + API token
+- **BCM Product Key** (license)
+- **BCM ISO file** (~5-12GB)
+- **SSH key pair** (public/private)
+
+### Phase 1: Local Orchestration (`deploy_bcm_air.py`)
+
+```
+User Machine                          NVIDIA Air API
+     |                                      |
+     |---(1) POST /api/v1/login/ ---------->|  [Authenticate, get JWT]
+     |<------ JWT Token --------------------|
+     |                                      |
+     |---(2) POST /api/v2/userconfigs/ ---->|  [Create cloud-init config]
+     |<------ UserConfig ID ----------------|
+     |                                      |
+     |---(3) POST /api/v2/simulations/ ---->|  [Create simulation from JSON topology]
+     |<------ Simulation ID ----------------|
+     |                                      |
+     |---(4) Assign cloud-init to nodes --->|
+     |                                      |
+     |---(5) POST start simulation -------->|
+     |                                      |
+     |---(6) Poll simulation state -------->|  [Wait for LOADED]
+     |                                      |
+     |---(7) POST create SSH service ------>|  [Enable SSH on bcm-01:eth0]
+     |<------ SSH host:port ----------------|
+     |                                      |
+     |---(8) Generate .ssh/config file      |
+```
+
+### Phase 2: File Transfer (SSH/rsync)
+
+```
+User Machine                     SSH Proxy                    bcm-01 (head node)
+     |                              |                              |
+     |--- rsync BCM ISO (~5GB) ---->|----------------------------->| /home/ubuntu/bcm.iso
+     |    [~10-20 min]              |                              |
+     |                              |                              |
+     |--- scp bcm_install.sh ------>|----------------------------->| /home/ubuntu/bcm_install.sh
+     |    [credentials embedded]    |                              |
+     |                              |                              |
+     |--- ssh execute script ------>|----------------------------->| bash bcm_install.sh
+```
+
+### Phase 3: Remote Installation (`bcm_install.sh` on bcm-01)
+
+```
+[Step 1] apt install dependencies
+    └── mysql-server, ansible, python3-pip, libldap2-dev...
+
+[Step 2] pip install PyMySQL, python-ldap
+
+[Step 3] Apply Ubuntu 24.04 package workaround (BCM 10.24.x only)
+    └── apt install libglapi-mesa
+    └── apt-mark hold libglapi-amber
+    └── Note: Only needed for backward compatibility with BCM 10.24.03
+              Not required for BCM 10.30.0 or 11.x
+
+[Step 4] Secure MySQL installation
+
+[Step 5] Verify BCM ISO exists
+
+[Step 6] git clone bcm-ansible-installer
+    └── https://github.com/twilson217/bcm-ansible-installer
+    
+[Step 7] ansible-galaxy collection install
+    └── brightcomputing.installer100 (BCM 10.x)
+    └── OR brightcomputing.installer110 (BCM 11.x)
+
+[Step 8] Generate Ansible variables
+    └── cluster-credentials.yml (product key, admin email, password)
+    └── cluster-settings.yml (network interfaces from topology)
+
+[Step 9] ansible-playbook playbook.yml
+    ├── Mount ISO to /mnt/dvd
+    ├── Install BCM packages
+    ├── Configure networking (external + management interfaces)
+    ├── Set up DNS (bind9)
+    ├── Set up TFTP/PXE
+    ├── Configure cluster manager
+    └── ~30-45 minutes
+```
+
+### Timeline
+
+| Time | Milestone |
+|------|-----------|
+| 0 min | Start deployment |
+| 1 min | Simulation created & starting |
+| 5 min | Simulation loaded, SSH enabled |
+| 15-25 min | ISO upload complete |
+| 55-70 min | BCM installation complete |
+
+### Key Components
 
 **bcm-ansible-installer Repository:**
-The [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) repo is cloned on the remote host and provides minimal scaffolding for the Ansible installation:
+The [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) repo is cloned on the remote host (not uploaded) and provides minimal scaffolding:
 - `playbook.yml` - Calls the Galaxy collection role
 - `inventory/hosts` - Defines head_node target
 - `requirements-control-node.txt` - Python dependencies
