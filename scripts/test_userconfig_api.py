@@ -1,167 +1,127 @@
 #!/usr/bin/env python3
 """
-Test script to reproduce UserConfig API access issue on air.nvidia.com.
-The API requires an 'organization' field even for personal accounts.
+Minimal reproduction script for UserConfig API access issue on air.nvidia.com.
+
+Issue: Free tier accounts get 403 "Access Denied" when trying to create UserConfigs.
+The error comes from Akamai CDN, not the API itself.
+
+Prerequisites:
+    pip install python-dotenv requests
 
 Usage:
-    # Set environment variables (or use .env file)
     export AIR_API_TOKEN="your_token_here"
     export AIR_USERNAME="your_email@example.com"
-    python scripts/test_userconfig_api.py
+    python test_userconfig_api.py
+    
+Or create a .env file with those variables.
+
+Expected behavior for free tier:
+- Login succeeds (200)
+- GET /api/v2/userconfigs/ may succeed (200) or fail (403)
+- POST /api/v2/userconfigs/ fails with 403 "Access Denied" from Akamai CDN
 """
 
 import os
 import sys
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv is optional
+
 import requests
 
-# Load .env file if present
-load_dotenv()
-
-# Configuration
 API_URL = os.getenv("AIR_API_URL", "https://air.nvidia.com")
 API_TOKEN = os.getenv("AIR_API_TOKEN")
 USERNAME = os.getenv("AIR_USERNAME")
 
-if not API_TOKEN:
-    print("ERROR: AIR_API_TOKEN environment variable not set")
-    print("Run: export AIR_API_TOKEN=your_token_here")
+if not API_TOKEN or not USERNAME:
+    print("ERROR: Set AIR_API_TOKEN and AIR_USERNAME environment variables")
+    print("  export AIR_API_TOKEN=your_token")
+    print("  export AIR_USERNAME=your_email@example.com")
     sys.exit(1)
 
-if not USERNAME:
-    print("ERROR: AIR_USERNAME environment variable not set")
-    print("Run: export AIR_USERNAME=your_email@example.com")
-    sys.exit(1)
-
-print(f"Testing against: {API_URL}")
+print(f"API URL: {API_URL}")
 print(f"Username: {USERNAME}")
-print(f"Token: {API_TOKEN[:10]}...{API_TOKEN[-4:]}")
+print(f"Token: {API_TOKEN[:8]}...{API_TOKEN[-4:]}")
 print()
 
-# Step 1: Authenticate to get JWT token
+# Step 1: Login to get JWT token
 print("=" * 60)
-print("Step 1: Authenticate (POST /api/v1/login/)")
+print("Step 1: POST /api/v1/login/")
 print("=" * 60)
-login_response = requests.post(
-    f"{API_URL}/api/v1/login/",
-    data={
-        'username': USERNAME,
-        'password': API_TOKEN
-    },
-    timeout=30
-)
-print(f"Status: {login_response.status_code}")
-
-if login_response.status_code != 200:
-    print(f"Response: {login_response.text[:500]}")
-    print("\nAuthentication failed! Cannot continue tests.")
+resp = requests.post(f"{API_URL}/api/v1/login/", data={
+    'username': USERNAME,
+    'password': API_TOKEN
+})
+print(f"Status: {resp.status_code}")
+if resp.status_code != 200:
+    print(f"Response: {resp.text[:500]}")
+    print("\nLogin failed!")
     sys.exit(1)
 
-jwt_token = login_response.json().get('token')
-if not jwt_token:
-    print(f"Response: {login_response.text[:500]}")
-    print("\nNo JWT token in response! Cannot continue tests.")
-    sys.exit(1)
+jwt = resp.json().get('token')
+print(f"✓ JWT token obtained")
 
-print(f"✓ Got JWT token: {jwt_token[:20]}...")
-
-# Headers with JWT token for subsequent requests
 headers = {
-    "Authorization": f"Bearer {jwt_token}",
+    "Authorization": f"Bearer {jwt}",
     "Content-Type": "application/json"
 }
 
-# Step 2: Check user's organizations
+# Step 2: List UserConfigs (GET)
 print("\n" + "=" * 60)
-print("Step 2: GET /api/v2/organizations/ (check user's orgs)")
+print("Step 2: GET /api/v2/userconfigs/")
 print("=" * 60)
-response = requests.get(f"{API_URL}/api/v2/organizations/", headers=headers)
-print(f"Status: {response.status_code}")
-orgs = []
-if response.status_code == 200:
-    data = response.json()
-    orgs = data.get('results', [])
-    print(f"Organizations found: {len(orgs)}")
-    for org in orgs:
-        print(f"  - {org.get('name')} (id: {org.get('id')})")
+resp = requests.get(f"{API_URL}/api/v2/userconfigs/", headers=headers)
+print(f"Status: {resp.status_code}")
+if resp.status_code == 200:
+    print(f"✓ Success: {resp.json().get('count', 0)} configs found")
 else:
-    print(f"Response: {response.text[:300]}")
+    print(f"Response: {resp.text[:300]}")
 
-# Step 3: Check organization memberships
+# Step 3: Create UserConfig (POST) - this is what fails
 print("\n" + "=" * 60)
-print("Step 3: GET /api/v2/organization-memberships/")
-print("=" * 60)
-response = requests.get(f"{API_URL}/api/v2/organization-memberships/", headers=headers)
-print(f"Status: {response.status_code}")
-if response.status_code == 200:
-    data = response.json()
-    memberships = data.get('results', [])
-    print(f"Memberships found: {len(memberships)}")
-    for mem in memberships:
-        print(f"  - Org: {mem.get('organization_name')}, Admin: {mem.get('is_org_admin')}")
-else:
-    print(f"Response: {response.text[:300]}")
-
-# Test 1: Try to list UserConfigs
-print("\n" + "=" * 60)
-print("Test 1: GET /api/v2/userconfigs/")
-print("=" * 60)
-response = requests.get(f"{API_URL}/api/v2/userconfigs/", headers=headers)
-print(f"Status: {response.status_code}")
-print(f"Response: {response.text[:300]}")
-
-# Test 2a: Try to create a UserConfig WITHOUT organization
-print("\n" + "=" * 60)
-print("Test 2a: POST /api/v2/userconfigs/ (no organization)")
+print("Step 3: POST /api/v2/userconfigs/")
 print("=" * 60)
 payload = {
-    "name": "test-cloud-init-no-org",
+    "name": "test-config-reproduction",
     "kind": "cloud-init-user-data",
-    "content": "#cloud-config\npassword: TestPassword123\nchpasswd:\n  expire: false"
+    "organization": None,  # Explicitly null, not omitted
+    "content": "#cloud-config\npassword: test123"
 }
-response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
-print(f"Status: {response.status_code}")
-print(f"Response: {response.text[:300]}")
+print(f"Payload: {payload}")
+resp = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
+print(f"Status: {resp.status_code}")
+print(f"Response: {resp.text[:500]}")
 
-# Test 2b: Try with organization=null explicitly
+if resp.status_code == 201:
+    # Clean up
+    config_id = resp.json().get('id')
+    print(f"\n✓ Created successfully! Cleaning up...")
+    requests.delete(f"{API_URL}/api/v2/userconfigs/{config_id}/", headers=headers)
+
+# Step 4: Control test - simulations endpoint
 print("\n" + "=" * 60)
-print("Test 2b: POST /api/v2/userconfigs/ (organization: null)")
+print("Step 4: GET /api/v2/simulations/ (control)")
 print("=" * 60)
-payload["organization"] = None
-response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
-print(f"Status: {response.status_code}")
-print(f"Response: {response.text[:300]}")
-
-# Test 2c: Try with empty string organization
-print("\n" + "=" * 60)
-print("Test 2c: POST /api/v2/userconfigs/ (organization: '')")
-print("=" * 60)
-payload["organization"] = ""
-payload["name"] = "test-cloud-init-empty-org"
-response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
-print(f"Status: {response.status_code}")
-print(f"Response: {response.text[:300]}")
-
-# Test 2d: If user has an org, try creating with it
-if orgs:
-    print("\n" + "=" * 60)
-    print(f"Test 2d: POST /api/v2/userconfigs/ (organization: {orgs[0].get('id')})")
-    print("=" * 60)
-    payload["organization"] = orgs[0].get('id')
-    payload["name"] = "test-cloud-init-with-org"
-    response = requests.post(f"{API_URL}/api/v2/userconfigs/", headers=headers, json=payload)
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:300]}")
-    
-    # Clean up if successful
-    if response.status_code == 201:
-        config_id = response.json().get('id')
-        print(f"  ✓ Created! Cleaning up...")
-        requests.delete(f"{API_URL}/api/v2/userconfigs/{config_id}/", headers=headers)
+resp = requests.get(f"{API_URL}/api/v2/simulations/", headers=headers)
+print(f"Status: {resp.status_code}")
+if resp.status_code == 200:
+    print(f"✓ Success: {resp.json().get('count', 0)} simulations found")
+else:
+    print(f"Response: {resp.text[:300]}")
 
 print("\n" + "=" * 60)
-print("Summary:")
-print("- UserConfig API requires 'organization' field")
-print("- If user has no organization, they cannot create UserConfigs")
-print("- This affects cloud-init configuration on air.nvidia.com")
+print("Summary")
 print("=" * 60)
+print("""
+If Step 3 returns 403 with "Access Denied" from Akamai CDN,
+this confirms the UserConfig API is blocked for free tier accounts.
+
+The error looks like:
+  <HTML><HEAD><TITLE>Access Denied</TITLE></HEAD>
+  <BODY>...Reference #18.xxxxx...</BODY></HTML>
+
+This is a CDN/WAF block, not an API permission error.
+""")
