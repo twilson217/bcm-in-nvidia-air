@@ -1901,13 +1901,20 @@ Examples:
         if args.resume:
             print("Mode: Resume from checkpoint")
         
-        deployer = AirBCMDeployer(
-            api_base_url=api_base_url,
-            api_token=args.api_token,
-            username=None,  # Will load from env
-            non_interactive=args.non_interactive,
-            progress_tracker=progress
-        )
+        try:
+            deployer = AirBCMDeployer(
+                api_base_url=api_base_url,
+                api_token=args.api_token,
+                username=None,  # Will load from env
+                non_interactive=args.non_interactive,
+                progress_tracker=progress
+            )
+        except Exception as e:
+            # Authentication errors are already printed with troubleshooting info
+            # Exit gracefully without traceback
+            if "Login failed" in str(e) or "Authentication" in str(e):
+                sys.exit(1)
+            raise  # Re-raise other exceptions
         
         # Track variables that might be restored from progress
         bcm_version = None
