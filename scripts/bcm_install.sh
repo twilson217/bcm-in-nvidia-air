@@ -241,8 +241,88 @@ patch_collection_remove_pkg() {
     fi
 }
 
+patch_collection_insert_ignore_errors_for_task() {
+    local task_name="$1"
+    local col_dir=""
+
+    local candidates=(
+        "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+    )
+
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            col_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$col_dir" ]; then
+        echo "  ⚠ Could not locate installed Ansible collection directory for ${BCM_COLLECTION}"
+        return 0
+    fi
+
+    local files
+    files="$(grep -RIl -- "name: ${task_name}" "${col_dir}" || true)"
+    if [ -z "$files" ]; then
+        echo "  ℹ Task '${task_name}' not found in collection (no patch applied)"
+        return 0
+    fi
+
+    echo "  Patching task '${task_name}' to ignore_errors (workaround for rc=-11 crashes)..."
+
+    python3 - <<'PY'
+import os
+import sys
+
+task_name = os.environ.get("TASK_NAME")
+files = os.environ.get("FILES", "").splitlines()
+
+def patch_file(path: str):
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    out = []
+    i = 0
+    changed = False
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+
+        if f"name: {task_name}" in line:
+            indent = line.split("name:")[0]
+            # If the next few lines already mention ignore_errors, don't duplicate.
+            window = "".join(lines[i+1:i+6])
+            if "ignore_errors:" not in window:
+                out.append(f"{indent}ignore_errors: true\n")
+                changed = True
+        i += 1
+
+    if changed:
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(out)
+
+for p in files:
+    p = p.strip()
+    if not p:
+        continue
+    try:
+        patch_file(p)
+    except Exception:
+        # Best-effort patching; don't fail installation because of patching.
+        pass
+PY
+}
+
 echo "  Applying Ansible collection patch (prevent libglapi-mesa install)..."
 patch_collection_remove_pkg "libglapi-mesa"
+
+# Workaround for observed crashes during certificate generation (rc=-11 / SIGSEGV)
+# If CMDaemon successfully writes cert.pem/cert.key but exits with rc=-11, Ansible fails.
+# We treat that task as non-fatal; later tasks will still fail if certs truly aren't created.
+export TASK_NAME="Generating webinterface certificate"
+export FILES="$(grep -RIl -- "name: ${TASK_NAME}" /root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.} 2>/dev/null || true; grep -RIl -- "name: ${TASK_NAME}" /home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.} 2>/dev/null || true)"
+patch_collection_insert_ignore_errors_for_task "${TASK_NAME}"
 
 
 # Step 8: Create configuration files
