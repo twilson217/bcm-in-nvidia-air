@@ -1249,58 +1249,75 @@ class AirBCMDeployer:
         temp_cloudinit.write_text(cloudinit_content)
         
         try:
-            # Create the cloud-init user-data script using raw API
-            # Note: SDK omits None values, but API requires organization field to be present (even if null)
-            print("  Creating cloud-init user-data script...")
-            userdata_name = f"bcm-password-config-{self.simulation_id[:8]}"
+            # UserConfigs are user-level, not simulation-specific!
+            # We can create once and reuse across all simulations.
+            # Use a fixed name so we can find and reuse existing configs.
+            print("  Creating/finding cloud-init user-data script...")
+            userdata_name = "bcm-cloudinit-password"  # Fixed name for reuse
             
             headers = {
                 "Authorization": f"Bearer {self.jwt_token}",
                 "Content-Type": "application/json"
             }
             
-            # API requires organization field to be explicitly present (can be null)
-            payload = {
-                "name": userdata_name,
-                "kind": "cloud-init-user-data",
-                "organization": None,  # Must be explicitly sent, not omitted
-                "content": cloudinit_content
-            }
-            
             userdata_id = None
+            
+            # First, check if we already have this config (avoids 403 on create)
             try:
-                # Debug: show request details
-                if os.getenv('DEBUG'):
-                    print(f"    [DEBUG] POST {self.api_base_url}/api/v2/userconfigs/")
-                    print(f"    [DEBUG] Token: {self.jwt_token[:20]}...")
-                    print(f"    [DEBUG] Content size: {len(cloudinit_content)} bytes")
-                
-                response = requests.post(
+                list_response = requests.get(
                     f"{self.api_base_url}/api/v2/userconfigs/",
                     headers=headers,
-                    json=payload,
                     timeout=30
                 )
+                if list_response.status_code == 200:
+                    for cfg in list_response.json().get('results', []):
+                        if cfg.get('name') == userdata_name:
+                            userdata_id = cfg.get('id')
+                            print(f"    ✓ Found existing UserConfig: {userdata_id}")
+                            
+                            # Update the content in case password changed
+                            update_response = requests.patch(
+                                f"{self.api_base_url}/api/v2/userconfigs/{userdata_id}/",
+                                headers=headers,
+                                json={"content": cloudinit_content},
+                                timeout=30
+                            )
+                            if update_response.status_code == 200:
+                                print(f"    ✓ Updated UserConfig content")
+                            break
+            except Exception as e:
+                if os.getenv('DEBUG'):
+                    print(f"    [DEBUG] List failed: {e}")
+            
+            # If not found, try to create it
+            if not userdata_id:
+                # API requires organization field to be explicitly present (can be null)
+                payload = {
+                    "name": userdata_name,
+                    "kind": "cloud-init-user-data",
+                    "organization": None,  # Must be explicitly sent, not omitted
+                    "content": cloudinit_content
+                }
                 
-                if response.status_code == 201:
-                    userdata_id = response.json().get('id')
-                    print(f"    ✓ Created UserConfig: {userdata_id}")
-                elif response.status_code == 400 and 'name' in response.text.lower() and 'already' in response.text.lower():
-                    # Config with same name exists, find it
-                    print(f"    ℹ UserConfig with this name may already exist, searching...")
-                    list_response = requests.get(
+                try:
+                    # Debug: show request details
+                    if os.getenv('DEBUG'):
+                        print(f"    [DEBUG] POST {self.api_base_url}/api/v2/userconfigs/")
+                        print(f"    [DEBUG] Token: {self.jwt_token[:20]}...")
+                        print(f"    [DEBUG] Content size: {len(cloudinit_content)} bytes")
+                    
+                    response = requests.post(
                         f"{self.api_base_url}/api/v2/userconfigs/",
                         headers=headers,
+                        json=payload,
                         timeout=30
                     )
-                    if list_response.status_code == 200:
-                        for cfg in list_response.json().get('results', []):
-                            if cfg.get('name') == userdata_name:
-                                userdata_id = cfg.get('id')
-                                print(f"    ℹ Using existing UserConfig: {userdata_id}")
-                                break
-                else:
-                    raise Exception(f"API returned {response.status_code}: {response.text}")
+                    
+                    if response.status_code == 201:
+                        userdata_id = response.json().get('id')
+                        print(f"    ✓ Created UserConfig: {userdata_id}")
+                    else:
+                        raise Exception(f"API returned {response.status_code}: {response.text}")
                     
             except Exception as e:
                 error_str = str(e).lower()
