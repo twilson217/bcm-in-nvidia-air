@@ -1974,11 +1974,7 @@ Host bcm
         if not self.upload_iso_to_bcm(iso_path, ssh_config_file):
             raise RuntimeError("Failed to upload BCM ISO")
         
-        # Step 3: Upload ansible installer submodule
-        if not self.upload_ansible_installer(ssh_config_file):
-            raise RuntimeError("Failed to upload bcm-ansible-installer")
-        
-        # Step 4: Upload install script
+        # Step 3: Upload install script (bcm-ansible-installer is cloned on remote host)
         if not self.upload_install_script(bcm_version, ssh_config_file):
             raise RuntimeError("Failed to upload installation script")
         

@@ -83,12 +83,20 @@ if [ ! -f "$BCM_ISO_PATH" ]; then
 fi
 echo "  ✓ ISO found at $BCM_ISO_PATH (Ansible will handle mounting)"
 
-# Step 6: Set up BCM Ansible installer (uploaded as part of deployment)
+# Step 6: Clone/setup BCM Ansible installer
 echo "[Step 6/10] Setting up BCM Ansible installer..."
+BCM_INSTALLER_REPO="https://github.com/twilson217/bcm-ansible-installer.git"
+
 if [ ! -d /home/ubuntu/bcm-ansible-installer ]; then
-    echo "  ✗ ERROR: bcm-ansible-installer directory not found at /home/ubuntu/bcm-ansible-installer"
-    echo "  This directory should have been uploaded during deployment."
-    exit 1
+    echo "  Cloning bcm-ansible-installer from GitHub..."
+    git clone "$BCM_INSTALLER_REPO" /home/ubuntu/bcm-ansible-installer
+    if [ $? -ne 0 ]; then
+        echo "  ✗ ERROR: Failed to clone bcm-ansible-installer"
+        exit 1
+    fi
+    echo "  ✓ Repository cloned"
+else
+    echo "  ✓ bcm-ansible-installer already exists"
 fi
 cd /home/ubuntu/bcm-ansible-installer
 
