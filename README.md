@@ -22,9 +22,11 @@ This solution automates the complete BCM deployment process:
 - Complete deployment in ~45-60 minutes (mostly unattended)
 
 **External Dependencies:**
-- [bcm-ansible-installer](https://github.com/berkink-nvidia-com/bcm-ansible-installer) - GitHub repo cloned during installation
-- [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm100/) - Ansible Galaxy collection for BCM 10.x
-- [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm110/) - Ansible Galaxy collection for BCM 11.x
+- [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) - Minimal GitHub repo cloned during installation
+- [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer100/) - Ansible Galaxy collection for BCM 10.x
+- [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer110/) - Ansible Galaxy collection for BCM 11.x
+
+**Note on Free Tier:** The external air.nvidia.com site may have limitations on free accounts (e.g., cloud-init/UserConfig may not be available). The script includes fallback mechanisms for password and SSH key configuration.
 
 ## Quick Start
 
@@ -68,10 +70,11 @@ export UV_LINK_MODE=copy
 uv pip install -e .
 ```
 
-5. Install expect (used for fallback password configuration):
+5. Install expect (required for password configuration fallback on free tier):
 ```bash
 sudo apt install -y expect
 ```
+This is especially important for air.nvidia.com free accounts where cloud-init may not be available.
 
 6. Configure your NVIDIA Air credentials:
 ```bash
@@ -156,26 +159,27 @@ The script will:
 ### Access Your BCM Environment
 
 After deployment completes, the script automatically:
-- ✅ Enables SSH service for the simulation
-- ✅ Creates `.ssh/config` file for easy SSH access
-- ✅ Configures ProxyJump through oob-mgmt-server
+- ✅ Enables SSH service directly on `bcm-01:eth0`
+- ✅ Creates `.ssh/<simulation-name>` config file for easy SSH access
+- ✅ Configures password and SSH key authentication
 
 **Easy SSH Access (using generated config):**
 ```bash
-# SSH to OOB management server
-ssh -F .ssh/config air-oob
+# SSH to BCM head node
+ssh -F .ssh/202512001-BCM-Lab air-bcm-01
 
-# SSH to BCM head node (via ProxyJump)
-ssh -F .ssh/config air-bcm-01
+# Or use the 'bcm' alias
+ssh -F .ssh/202512001-BCM-Lab bcm
 
 # Your SSH key from ~/.ssh/id_rsa is automatically used
 ```
 
 **Manual SSH Access (if needed):**
 ```bash
-# Via Air console (click "SSH" in Air UI)
-# Or via ProxyJump manually:
-ssh -J ubuntu@workerNN.air-inside.nvidia.com:PORT root@bcm-01
+# Direct SSH (get host/port from script output)
+ssh -p <port> ubuntu@<worker>.air.nvidia.com
+
+# Default password: nvidia (or Nvidia1234! if cloud-init worked)
 ```
 
 **Automated Password & SSH Key Configuration:**
@@ -229,21 +233,22 @@ cmsh
 
 ## Network Topology
 
-The deployment creates the following environment:
+The default topology (`topologies/default.json`) creates the following environment:
 
-| Node name        | IP address        | MAC address       | Function          |
-| ---------------- | ----------------- | ----------------- | ----------------- |
-| bcm-01           | 192.168.200.254   | (auto)            | BCM head node     |
-| oob-mgmt-server  | 192.168.200.1     | (auto)            | OOB management    |
-| oob-mgmt-switch  | 192.168.200.251   | (auto)            | OOB switch        |
-| leaf01           | 192.168.200.12    | 44:38:39:22:AA:02 | Cumulus switch    |
-| leaf02           | 192.168.200.13    | 44:38:39:22:AA:03 | Cumulus switch    |
-| compute0         | 192.168.200.14    | 44:38:39:22:AA:04 | PXE boot server   |
-| compute1         | 192.168.200.15    | 44:38:39:22:AA:05 | PXE boot server   |
-| compute2         | 192.168.200.16    | 44:38:39:22:AA:06 | PXE boot server   |
-| ubuntu0          | 192.168.200.10    | 44:38:39:22:AA:01 | Ubuntu server     |
+| Node name        | Interface | IP address        | Function          |
+| ---------------- | --------- | ----------------- | ----------------- |
+| bcm-01           | eth0      | DHCP (outbound)   | BCM head node     |
+| bcm-01           | eth4      | 192.168.200.254   | Management network|
+| oob-mgmt-switch  | -         | -                 | OOB switch        |
+| leaf-01 to 04    | eth0      | (via oob-switch)  | Cumulus switches  |
+| spine-01, 02     | eth0      | (via oob-switch)  | Spine switches    |
+| cpu-01 to 05     | eth0      | (PXE boot)        | Compute nodes     |
 
-Network: `192.168.200.0/24` (internal OOB management network)
+**Key Network Details:**
+- **Outbound Interface**: `bcm-01:eth0` → `outbound` (DHCP, internet access, SSH service)
+- **Management Network**: `192.168.200.0/24` via `oob-mgmt-switch`
+- **BCM Management IP**: `192.168.200.254` on the interface connected to `oob-mgmt-switch`
+- **Static MAC for Licensing**: `48:b0:2d:00:00:00` on `bcm-01:eth0`
 
 ## Project Structure
 
@@ -261,7 +266,7 @@ Network: `192.168.200.0/24` (internal OOB management network)
 
 **Topologies:**
 - `topologies/default.json` - Default BCM lab topology (JSON format)
-- `topologies/topology-design.md` - Topology design requirements
+- `topologies/README.md` - Topology design requirements and documentation
 
 **ISO Directory:**
 - `.iso/` - Place your BCM ISO files here (gitignored)
@@ -289,28 +294,29 @@ Create custom topologies using the NVIDIA Air web UI and export them to JSON for
 
 ### Design Requirements
 
-See `topologies/topology-design.md` for full requirements. Key points:
+See `topologies/README.md` for full requirements. Key points:
 
-1. **BCM Node Must Connect to "outbound"**: The BCM head node must have an interface connected to `"outbound"` for SSH access
+1. **BCM Node Must Use eth0 for "outbound"**: The BCM head node's `eth0` **must** be connected to `"outbound"` for SSH access. This is a NVIDIA Air requirement - the `40-air.yaml` netplan only configures `eth0` for DHCP.
 2. **BCM Node Naming**: Node name must start with `bcm` (e.g., `bcm-01`, `bcm-headnode`)
 3. **Disable OOB (Recommended)**: Set `"oob": false` to have full control over all interfaces
+4. **Management Interface**: Connect another interface to `oob-mgmt-switch` for the 192.168.200.0/24 network
 
 ### Example Link to "outbound"
 
-In your JSON topology, ensure the BCM node has a link like:
+In your JSON topology, ensure the BCM node has `eth0` connected to outbound:
 
 ```json
 [
     {
-        "interface": "eth4",
+        "interface": "eth0",
         "node": "bcm-01",
-        "mac": "48:b0:2d:a4:dc:c1"
+        "mac": "48:b0:2d:00:00:00"
     },
     "outbound"
 ]
 ```
 
-The script auto-detects this interface and creates the SSH service on it.
+**⚠️ Important**: Using any interface other than `eth0` for outbound will cause hostname and IP assignment failures.
 
 ### Static MAC Address for Licensing
 
@@ -335,47 +341,43 @@ The script validates:
 
 ## Next Steps: Device Onboarding
 
-After BCM is installed, you'll need to onboard the switches and compute nodes into BCM management.
+After BCM is installed, you'll need to onboard the switches and compute nodes into BCM management. The exact steps depend on your topology.
 
-### 1. Disable DHCP on oob-mgmt-server
+### 1. Access BCM Shell
 
-First, disable the default DHCP server so BCM can manage DHCP:
-
-```bash
-# Connect to oob-mgmt-server and run:
-sudo systemctl disable isc-dhcp-server
-sudo service isc-dhcp-server stop
-sudo service isc-dhcp-server status
-```
-
-### 2. Configure BCM Network Gateway
-
-SSH to bcm-01 and configure the network gateway:
+SSH to bcm-01 and enter the BCM shell:
 
 ```bash
-ssh root@192.168.200.254
-# Password: Nvidia1234! (or your custom password if specified)
+# Using the generated SSH config
+ssh -F .ssh/<simulation-name> bcm
+
+# Or direct SSH (use worker/port from deployment output)
+ssh -p <port> ubuntu@<worker>.air.nvidia.com
 
 # Enter BCM shell
 cmsh
+```
 
-# Configure gateway (automated by deployment script, but verify)
+### 2. Verify Network Configuration
+
+BCM should already have the management network configured:
+
+```bash
+cmsh
 network
 use internalnet
-set gateway 192.168.200.1
-commit
+get gateway
+# Should show the management network gateway
 ```
 
-### 3. Onboard Cumulus Switches
+### 3. Onboard Cumulus Switches (Example)
 
-From the BCM shell (`cmsh`), add the Cumulus switches:
+From the BCM shell (`cmsh`), add switches:
 
-**Add leaf01:**
-```
+```bash
 device
-list
-device add switch leaf01 192.168.200.12
-set mac 44:38:39:22:AA:02
+add switch leaf-01
+set mac <mac-from-topology>
 set disablesnmp yes
 set hasclientdaemon yes
 ztpsettings 
@@ -383,93 +385,38 @@ set enableapi yes
 commit
 ```
 
-Then on leaf01 console, enable ZTP and reboot:
+Then on the switch console, enable ZTP and reboot:
 
 ```bash
 sudo ztp -e
 sudo reboot
 ```
 
-**Add leaf02:**
+### 4. Onboard Compute Nodes (Example)
+
+Add compute nodes for PXE boot management:
 
 ```bash
 device
-list
-device add switch leaf02 192.168.200.13
-set mac 44:38:39:22:AA:03
-set disablesnmp yes
-set hasclientdaemon yes
-ztpsettings 
-set enableapi yes
+add PhysicalNode cpu-01
+set mac <mac-from-topology>
 commit
 ```
 
-Then on leaf02 console:
-
-```bash
-sudo ztp -e
-sudo reboot
-```
-
-### 4. Onboard Compute Nodes
-
-Add compute nodes to BCM for PXE boot management:
-
-**Add compute0:**
-
-```bash
-device
-list
-device add PhysicalNode compute0 192.168.200.14
-set mac 44:38:39:22:AA:04
-commit
-```
-
-**Add compute1:**
-
-```bash
-device add PhysicalNode compute1 192.168.200.15
-set mac 44:38:39:22:AA:05
-commit
-```
-
-**Add compute2:**
-
-```bash
-device add PhysicalNode compute2 192.168.200.16
-set mac 44:38:39:22:AA:06
-commit
-```
-
-Reboot the compute nodes in NVIDIA Air so PXE boot process starts.
+Reboot the compute nodes in NVIDIA Air to start the PXE boot process.
 
 ### 5. Monitor Device Status
 
-From BCM `cmsh` command line, check the status of devices and wait for them to become `UP`:
+Check device status and wait for them to become `UP`:
 
 ```bash
 device
 list
 ```
 
-**Expected device progression:**
-
-**Switches:** You'll see status change from `BOOTING` → `UP` as ZTP completes and cm-lite-daemon registers (takes 2-5 minutes).
-
-**Compute Nodes:** Status will progress through `BOOTING` → `INSTALLING` → `INSTALLER_CALLINGINIT` → `UP` (takes 5-10 minutes).
-
-Example output when all devices are online:
-
-```
-Type          Hostname         MAC                IP              Status
-------------- ---------------- ------------------ --------------- ----------
-HeadNode      bcm-nv-air       48:B0:2D:11:FE:92  192.168.200.254 [ UP ]
-PhysicalNode  compute0         44:38:39:22:AA:04  192.168.200.14  [ UP ]
-PhysicalNode  compute1         44:38:39:22:AA:05  192.168.200.15  [ UP ]
-PhysicalNode  compute2         44:38:39:22:AA:06  192.168.200.16  [ UP ]
-Switch        leaf01           44:38:39:22:AA:02  192.168.200.12  [ UP ]
-Switch        leaf02           44:38:39:22:AA:03  192.168.200.13  [ UP ]
-```
+**Expected progression:**
+- **Switches**: `BOOTING` → `UP` (2-5 minutes)
+- **Compute Nodes**: `BOOTING` → `INSTALLING` → `INSTALLER_CALLINGINIT` → `UP` (5-10 minutes)
 
 ## Advanced Configuration
 
@@ -572,46 +519,48 @@ Failed to resolve 'air-inside.nvidia.com'
 
 ### SSH Access Issues
 
-**SSH Key Only Works on oob-mgmt-server:**
+**SSH Connection to BCM Node:**
 
-Air automatically adds your SSH key to `oob-mgmt-server`, but not to other nodes. To enable password-less SSH to all nodes:
+The SSH service is created directly on `bcm-01:eth0`. Use the generated SSH config:
 
-**Option 1: Copy SSH key to nodes (recommended)**
 ```bash
-# From oob-mgmt-server, copy key to BCM node
-ssh -F .ssh/config air-oob
-ssh-copy-id root@bcm-01
-# Enter password when prompted (default: Nvidia1234!)
+# Use the SSH config created during deployment
+ssh -F .ssh/<simulation-name> air-bcm-01
+
+# Or use the 'bcm' alias
+ssh -F .ssh/<simulation-name> bcm
 ```
 
-**Option 2: Use password authentication**
-```bash
-# Install sshpass if needed
-sudo apt install sshpass
+**Default Passwords:**
 
-# SSH with password
-sshpass -p 'Nvidia1234!' ssh -F .ssh/config air-bcm-01
-```
+| Scenario | Username | Password |
+|----------|----------|----------|
+| Cloud-init worked (air-inside) | ubuntu/root | Your configured password (default: `Nvidia1234!`) |
+| Cloud-init unavailable (air.nvidia.com free tier) | ubuntu | `nvidia` |
+
+**Free Tier Limitations:**
+
+On air.nvidia.com free accounts, cloud-init may not be available. The script will:
+1. Attempt cloud-init configuration
+2. Fall back to SSH-based configuration using `expect`
+3. If both fail, you'll need to use the default password `nvidia`
 
 **SSH Key Permission Errors in WSL:**
 
 If you get "UNPROTECTED PRIVATE KEY FILE" error:
 ```bash
 # Create new key on WSL filesystem (not Windows /mnt/c/)
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa2
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa_wsl
 
-# Upload new key to Air (copy contents of ~/.ssh/id_rsa2.pub to Air profile)
-
-# Update config to use new key
-# The generated .ssh/config automatically uses ~/.ssh/id_rsa
+# Update SSH_PRIVATE_KEY and SSH_PUBLIC_KEY in .env to use the new key
 ```
 
 **Password Change Prompt:**
 
 If you see "You must change your password now" when connecting:
-- This is the default Ubuntu behavior
-- The script sets the default password during deployment
-- Use the password you specified (or Nvidia1234! if using default)
+- This happens on first login with default Ubuntu images
+- The script tries to handle this automatically with `expect`
+- If prompted, change to your desired password
 
 ### Ansible Playbook Failures
 
@@ -666,17 +615,25 @@ pip install -r requirements.txt
 # Show help
 python deploy_bcm_air.py --help
 
+# Non-interactive mode (accept all defaults)
+python deploy_bcm_air.py -y
+
+# Specify BCM version (major version)
+python deploy_bcm_air.py --bcm-version 10
+python deploy_bcm_air.py --bcm-version 11
+
+# Specify exact BCM release (when multiple ISOs available)
+python deploy_bcm_air.py --bcm-version 10.30.0
+python deploy_bcm_air.py --bcm-version 10.24.03
+
 # Deploy to internal NVIDIA Air site
 python deploy_bcm_air.py --internal
 
-# Deploy with custom API URL
-python deploy_bcm_air.py --api-url https://custom-air.example.com/api/v2
-
-# Deploy with custom name
-python deploy_bcm_air.py --name my-bcm-cluster
-
 # Use custom topology file
-python deploy_bcm_air.py --dot-file custom-topology.dot
+python deploy_bcm_air.py --topology topologies/my-topology.json
+
+# Resume from last checkpoint
+python deploy_bcm_air.py --resume
 
 # Create simulation only (skip BCM installation)
 python deploy_bcm_air.py --skip-ansible
@@ -702,29 +659,32 @@ bcm-in-nvidia-air/
 ├── deploy_bcm_air.py              # Main automation script (START HERE!)
 ├── README.md                      # This file
 ├── .env                           # Your environment config (create from sample-configs/env.example)
-├── cloud-init-password.yaml       # Your config with SSH key (auto-generated or copy from sample-configs/)
+├── cloud-init-password.yaml       # Your config with SSH key (auto-generated)
 │
 ├── sample-configs/                # Example configuration templates
 │   ├── env.example                # Example environment configuration
 │   └── cloud-init-password.yaml.example  # Cloud-init template
 │
 ├── .iso/                          # BCM ISO files (gitignored)
-│   └── bcm-10.0-ubuntu2404.iso    # Place your BCM ISO here
+│   ├── bcm-10.30.0-ubuntu2404.iso # BCM 10.x ISO (example)
+│   └── bcm-11.0-ubuntu2404.iso    # BCM 11.x ISO (example)
 │
-├── scripts/                       # All scripts (installation, ZTP, testing)
+├── .ssh/                          # Generated SSH configs (gitignored)
+│   └── <simulation-name>          # SSH config for each simulation
+│
+├── .logs/                         # Progress tracking (gitignored)
+│   └── progress.json              # Deployment checkpoint for --resume
+│
+├── scripts/                       # All scripts (see scripts/README.md)
+│   ├── README.md                  # Script documentation
 │   ├── bcm_install.sh             # BCM installation script (runs on head node)
-│   ├── cumulus-ztp.sh             # Cumulus switch ZTP script
 │   ├── check_setup.py             # Setup verification helper
-│   ├── check_sim_state.py         # Debug simulation state
-│   ├── test_sdk_auth.py           # SDK authentication test
-│   ├── test_direct_auth.py        # Direct API authentication test
-│   └── test_auth.sh               # Shell-based auth test
+│   ├── topology_validation.py     # Validate topology files
+│   └── ...                        # Testing/debug scripts
 │
 ├── topologies/                    # Network topology files (JSON format)
-│   ├── default.json               # Default BCM lab topology
-│   ├── test-bcm.json              # Minimal test topology
-│   └── topology-design.md         # Design requirements documentation
-│
+│   ├── README.md                  # Design requirements documentation
+│   └── default.json               # Default BCM lab topology
 │
 ├── pyproject.toml                 # Project metadata and dependencies (uv)
 └── requirements.txt               # Python dependencies (pip fallback)
@@ -736,26 +696,28 @@ The deployment uses a two-phase approach:
 
 **Phase 1: Simulation Setup (your machine)**
 1. Creates NVIDIA Air simulation via API
-2. Applies cloud-init for password/SSH key configuration
+2. Attempts cloud-init for password/SSH key configuration
+   - Falls back to SSH-based configuration if cloud-init unavailable (free tier)
 3. Waits for simulation to load
-4. Uploads BCM ISO via rsync (reliable, resumable)
-5. Uploads installation script with your credentials
+4. Enables SSH service on `bcm-01:eth0`
+5. Uploads BCM ISO via rsync (reliable, resumable)
+6. Uploads installation script with your credentials
 
 **Phase 2: BCM Installation (on head node)**
-1. Mounts ISO as installation source
-2. Clones [bcm-ansible-installer](https://github.com/berkink-nvidia-com/bcm-ansible-installer)
-3. Installs Ansible Galaxy collection (`brightcomputing.installer100` or `installer110`)
-4. Generates cluster credentials and network settings
-5. Runs official BCM Ansible playbook locally
-6. Configures DNS, TFTP, and passwords
+1. Clones [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) (minimal scaffolding)
+2. Installs Ansible Galaxy collection (`brightcomputing.installer100` or `installer110`)
+3. Generates cluster credentials and network settings from topology
+4. Runs official BCM Ansible playbook locally
+5. Configures DNS, TFTP, and passwords
 
 **GitHub Dependency:**
-The installation script clones `https://github.com/berkink-nvidia-com/bcm-ansible-installer.git` which provides:
-- Wrapper playbook for BCM installation
-- Inventory templates for head node setup
-- Post-installation DNS configuration tasks
+The installation script clones `https://github.com/twilson217/bcm-ansible-installer.git` which provides minimal scaffolding:
+- `playbook.yml` - Calls the Galaxy collection role
+- `inventory/hosts` - Defines head_node target
+- `requirements-control-node.txt` - Python dependencies
+- `ansible.cfg` - Ansible configuration
 
-This repo in turn uses the official Bright Computing Ansible Galaxy collections.
+This uses the official Bright Computing Ansible Galaxy collections for actual BCM installation.
 
 ---
 
