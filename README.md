@@ -38,7 +38,7 @@ This solution automates the complete BCM deployment process:
 4. **BCM ISO file** (~5GB) - Download from [Bright Computing Customer Portal](https://customer.brightcomputing.com/download-iso)
    - Requires your BCM product key
    - Download the Ubuntu 24.04 version matching your desired BCM version (10.x or 11.x)
-5. **BCM Product Key** - Your license key for BCM installation
+5. **BCM Product Key** - [Request a Free BCM License](https://www.nvidia.com/en-us/data-center/base-command-manager/)
 
 ### Installation
 
