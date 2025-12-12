@@ -270,29 +270,206 @@ class AirBCMDeployer:
             print(f"  3. For internal Air, ensure you're connected to VPN")
             raise
         
-    def prompt_bcm_version(self):
-        """Prompt user for BCM version selection"""
+    def scan_available_isos(self):
+        """
+        Scan .iso/ directory and return available BCM ISOs with version info.
+        
+        Returns:
+            dict: {
+                '10': [{'version': '10.30.0', 'file': Path, 'size_gb': float}, ...],
+                '11': [{'version': '11.30.0', 'file': Path, 'size_gb': float}, ...]
+            }
+        """
+        iso_dir = Path(__file__).parent / '.iso'
+        result = {'10': [], '11': []}
+        
+        if not iso_dir.exists():
+            return result
+        
+        # Pattern to extract version: bcm-10.30.0-xxx.iso or bcm-11.0-xxx.iso
+        import re
+        version_pattern = re.compile(r'bcm-?(10|11)\.?(\d+)?\.?(\d+)?', re.IGNORECASE)
+        
+        for iso_file in iso_dir.glob('*.iso'):
+            name_lower = iso_file.name.lower()
+            match = version_pattern.search(name_lower)
+            
+            if match:
+                major = match.group(1)  # '10' or '11'
+                minor = match.group(2) or '0'  # e.g., '30' or '0'
+                patch = match.group(3) or '0'  # e.g., '0'
+                
+                version = f"{major}.{minor}.{patch}"
+                size_gb = iso_file.stat().st_size / (1024**3)
+                
+                result[major].append({
+                    'version': version,
+                    'file': iso_file,
+                    'size_gb': size_gb,
+                    'filename': iso_file.name
+                })
+        
+        # Sort each list by version (newest first)
+        for major in result:
+            result[major].sort(key=lambda x: [int(p) for p in x['version'].split('.')], reverse=True)
+        
+        return result
+    
+    def prompt_bcm_version(self, requested_version=None):
+        """
+        Prompt user for BCM version selection.
+        
+        Args:
+            requested_version: Optional specific version requested via --bcm-version
+                               Can be '10', '11', '10.30.0', '11.30.0', etc.
+        
+        Returns:
+            tuple: (version_string, collection_name, iso_path)
+        """
         print("\n" + "="*60)
         print("BCM Version Selection")
         print("="*60)
-        print("\nPlease select the BCM version to install:")
-        print("  1) BCM 10.x (brightcomputing.bcm100)")
-        print("  2) BCM 11.x (brightcomputing.bcm110)")
-        print()
         
-        # Non-interactive mode: default to BCM 10
+        # Scan available ISOs
+        available = self.scan_available_isos()
+        bcm10_isos = available['10']
+        bcm11_isos = available['11']
+        
+        # Show available ISOs
+        print("\nAvailable BCM ISOs:")
+        all_options = []
+        
+        if bcm10_isos:
+            print("  BCM 10:")
+            for iso in bcm10_isos:
+                all_options.append(('10', iso))
+                print(f"    - {iso['version']}: {iso['filename']} ({iso['size_gb']:.2f} GB)")
+        else:
+            print("  BCM 10: (no ISOs found)")
+        
+        if bcm11_isos:
+            print("  BCM 11:")
+            for iso in bcm11_isos:
+                all_options.append(('11', iso))
+                print(f"    - {iso['version']}: {iso['filename']} ({iso['size_gb']:.2f} GB)")
+        else:
+            print("  BCM 11: (no ISOs found)")
+        
+        if not all_options:
+            print("\n✗ No BCM ISOs found in .iso/ directory")
+            print("  Download from: https://customer.brightcomputing.com/download-iso")
+            return None, None, None
+        
+        # If a specific version was requested
+        if requested_version:
+            return self._resolve_requested_version(requested_version, available)
+        
+        # Non-interactive mode
         if self.non_interactive:
-            print("  [non-interactive] Using default: BCM 10.x")
-            return '10.x', 'brightcomputing.bcm100'
+            # Default to BCM 10 if available, else BCM 11
+            if len(bcm10_isos) == 1:
+                iso = bcm10_isos[0]
+                print(f"\n  [non-interactive] Using: BCM {iso['version']}")
+                return iso['version'], 'brightcomputing.installer100', iso['file']
+            elif len(bcm10_isos) > 1:
+                print("\n✗ Multiple BCM 10 ISOs found. In non-interactive mode, use:")
+                print(f"   --bcm-version {bcm10_isos[0]['version']}")
+                for iso in bcm10_isos:
+                    print(f"   --bcm-version {iso['version']}")
+                return None, None, None
+            elif len(bcm11_isos) == 1:
+                iso = bcm11_isos[0]
+                print(f"\n  [non-interactive] Using: BCM {iso['version']}")
+                return iso['version'], 'brightcomputing.installer110', iso['file']
+            elif len(bcm11_isos) > 1:
+                print("\n✗ Multiple BCM 11 ISOs found. In non-interactive mode, use:")
+                for iso in bcm11_isos:
+                    print(f"   --bcm-version {iso['version']}")
+                return None, None, None
         
+        # Interactive mode - let user choose
+        print("\nSelect BCM version to install:")
+        for i, (major, iso) in enumerate(all_options, 1):
+            print(f"  {i}) BCM {iso['version']} ({iso['filename']})")
+        
+        default_choice = 1
         while True:
-            choice = input("Enter your choice (1 or 2) [default: 1]: ").strip()
-            if choice == '' or choice == '1':
-                return '10.x', 'brightcomputing.bcm100'
-            elif choice == '2':
-                return '11.x', 'brightcomputing.bcm110'
+            choice = input(f"Enter your choice [default: {default_choice}]: ").strip()
+            if choice == '':
+                choice = default_choice
             else:
-                print("Invalid choice. Please enter 1 or 2.")
+                try:
+                    choice = int(choice)
+                except ValueError:
+                    print("Invalid choice. Enter a number.")
+                    continue
+            
+            if 1 <= choice <= len(all_options):
+                major, iso = all_options[choice - 1]
+                collection = f'brightcomputing.installer{major}0'
+                print(f"\n✓ Selected: BCM {iso['version']}")
+                return iso['version'], collection, iso['file']
+            else:
+                print(f"Invalid choice. Enter 1-{len(all_options)}.")
+    
+    def _resolve_requested_version(self, requested_version, available):
+        """
+        Resolve a requested version string to a specific ISO.
+        
+        Args:
+            requested_version: '10', '11', '10.30.0', '11.30.0', etc.
+            available: Dict from scan_available_isos()
+        
+        Returns:
+            tuple: (version_string, collection_name, iso_path) or (None, None, None)
+        """
+        # Determine major version
+        if requested_version.startswith('10'):
+            major = '10'
+            isos = available['10']
+            collection = 'brightcomputing.installer100'
+        elif requested_version.startswith('11'):
+            major = '11'
+            isos = available['11']
+            collection = 'brightcomputing.installer110'
+        else:
+            print(f"\n✗ Invalid BCM version: {requested_version}")
+            print("  Version must start with 10 or 11 (e.g., 10, 11, 10.30.0, 11.30.0)")
+            return None, None, None
+        
+        if not isos:
+            print(f"\n✗ No BCM {major} ISOs found in .iso/ directory")
+            return None, None, None
+        
+        # If just major version requested (10 or 11)
+        if requested_version in ('10', '11'):
+            if len(isos) == 1:
+                iso = isos[0]
+                print(f"\n✓ Using BCM {iso['version']} ({iso['filename']})")
+                return iso['version'], collection, iso['file']
+            else:
+                print(f"\n✗ Multiple BCM {major} ISOs found. Please specify exact version:")
+                for iso in isos:
+                    print(f"   --bcm-version {iso['version']}")
+                return None, None, None
+        
+        # Specific version requested - find exact match
+        for iso in isos:
+            if iso['version'] == requested_version:
+                print(f"\n✓ Using BCM {iso['version']} ({iso['filename']})")
+                return iso['version'], collection, iso['file']
+        
+        # Try partial match (e.g., 10.30 matches 10.30.0)
+        for iso in isos:
+            if iso['version'].startswith(requested_version):
+                print(f"\n✓ Using BCM {iso['version']} ({iso['filename']})")
+                return iso['version'], collection, iso['file']
+        
+        print(f"\n✗ No ISO found matching version {requested_version}")
+        print(f"  Available BCM {major} versions:")
+        for iso in isos:
+            print(f"   - {iso['version']}: {iso['filename']}")
+        return None, None, None
     
     def prompt_default_password(self):
         """Prompt user for default password for nodes"""
@@ -1524,13 +1701,14 @@ Host bcm
             print(f"  Check logs: ssh -F {ssh_config_file} air-{self.bcm_node_name} 'cat /home/ubuntu/ansible_bcm_install.log'")
             return False
     
-    def install_bcm(self, bcm_version, ssh_config_file):
+    def install_bcm(self, bcm_version, ssh_config_file, iso_path=None):
         """
         Main BCM installation method - uploads ISO and runs installation
         
         Args:
-            bcm_version: BCM version string (10.x or 11.x)
+            bcm_version: BCM version string (e.g., '10.30.0', '11.30.0')
             ssh_config_file: Path to SSH config file
+            iso_path: Path to BCM ISO file (optional, will search if not provided)
         """
         print("\n" + "="*60)
         print(f"Installing BCM {bcm_version}")
@@ -1543,8 +1721,9 @@ Host bcm
             print("    BCM_PRODUCT_KEY=your_key_here")
             raise ValueError("BCM product key not configured")
         
-        # Step 1: Find ISO
-        iso_path = self.find_bcm_iso(bcm_version)
+        # Step 1: Find ISO if not provided
+        if not iso_path:
+            iso_path = self.find_bcm_iso(bcm_version)
         if not iso_path:
             raise FileNotFoundError("BCM ISO not found")
         
@@ -1662,8 +1841,7 @@ Examples:
     )
     parser.add_argument(
         '--bcm-version',
-        choices=['10', '11'],
-        help='BCM version to install (10 or 11). If not specified, will prompt or use default (10) in non-interactive mode.'
+        help='BCM version to install. Can be major version (10, 11) or specific release (10.30.0, 11.30.0). If multiple ISOs exist for a major version, specific release is required in non-interactive mode.'
     )
     parser.add_argument(
         '--non-interactive', '-y',
@@ -1734,6 +1912,7 @@ Examples:
         # Track variables that might be restored from progress
         bcm_version = None
         collection_name = None
+        bcm_iso_path = None
         simulation_name = None
         cloudinit_success = False
         ssh_config_file = None
@@ -1742,24 +1921,29 @@ Examples:
         if args.resume and progress.is_step_completed('bcm_version_selected'):
             bcm_version = progress.get('bcm_version')
             collection_name = progress.get('collection_name')
+            iso_path_str = progress.get('bcm_iso_path')
+            if iso_path_str:
+                bcm_iso_path = Path(iso_path_str)
             print(f"\n  [resume] BCM version: {bcm_version}")
         elif args.bcm_version:
             # Use command-line specified version
-            if args.bcm_version == '10':
-                bcm_version = '10.x'
-                collection_name = 'brightcomputing.bcm100'
-            else:
-                bcm_version = '11.x'
-                collection_name = 'brightcomputing.bcm110'
-            print(f"\nUsing BCM version from command line: {bcm_version}")
+            bcm_version, collection_name, bcm_iso_path = deployer.prompt_bcm_version(args.bcm_version)
+            if not bcm_version:
+                print("\n✗ Failed to resolve BCM version. Exiting.")
+                sys.exit(1)
             progress.complete_step('bcm_version_selected', 
                                    bcm_version=bcm_version, 
-                                   collection_name=collection_name)
+                                   collection_name=collection_name,
+                                   bcm_iso_path=str(bcm_iso_path) if bcm_iso_path else None)
         else:
-            bcm_version, collection_name = deployer.prompt_bcm_version()
+            bcm_version, collection_name, bcm_iso_path = deployer.prompt_bcm_version()
+            if not bcm_version:
+                print("\n✗ No BCM version selected. Exiting.")
+                sys.exit(1)
             progress.complete_step('bcm_version_selected', 
                                    bcm_version=bcm_version, 
-                                   collection_name=collection_name)
+                                   collection_name=collection_name,
+                                   bcm_iso_path=str(bcm_iso_path) if bcm_iso_path else None)
         
         # Step: Password configuration
         if args.resume and progress.is_step_completed('password_configured'):
@@ -1879,7 +2063,7 @@ Examples:
             if args.resume and progress.is_step_completed('bcm_installed'):
                 print(f"  [resume] BCM already installed")
             else:
-                deployer.install_bcm(bcm_version, ssh_config_file)
+                deployer.install_bcm(bcm_version, ssh_config_file, bcm_iso_path)
                 progress.complete_step('bcm_installed')
         else:
             print("\n--skip-ansible specified, skipping BCM installation")

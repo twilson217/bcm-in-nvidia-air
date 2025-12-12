@@ -139,6 +139,38 @@ def check_ssh_key_exists(env_vars, var_name):
         return False, f"File not found: {path}"
 
 
+def parse_bcm_iso_version(filename):
+    """
+    Parse BCM version from ISO filename.
+    
+    Examples:
+        bcm-10.0-ubuntu2404.iso -> ('10', '10.0.0')
+        bcm-10.30.0-ubuntu2404.iso -> ('10', '10.30.0')
+        bcm-11.30.0-ubuntu2404.iso -> ('11', '11.30.0')
+    
+    Returns:
+        tuple: (major_version, full_version) or (None, None) if not BCM
+    """
+    import re
+    name_lower = filename.lower()
+    
+    if 'bcm' not in name_lower and 'bright' not in name_lower:
+        return None, None
+    
+    # Pattern to extract version: bcm-10.30.0-xxx.iso or bcm-11.0-xxx.iso
+    version_pattern = re.compile(r'bcm-?(10|11)\.?(\d+)?\.?(\d+)?', re.IGNORECASE)
+    match = version_pattern.search(name_lower)
+    
+    if match:
+        major = match.group(1)  # '10' or '11'
+        minor = match.group(2) or '0'
+        patch = match.group(3) or '0'
+        full_version = f"{major}.{minor}.{patch}"
+        return major, full_version
+    
+    return None, None
+
+
 def check_bcm_iso():
     """Check for BCM 10 or 11 ISO in .iso directory"""
     iso_dir = PROJECT_ROOT / ".iso"
@@ -146,44 +178,52 @@ def check_bcm_iso():
     if not iso_dir.exists():
         return False, ".iso directory not found"
     
-    # Look for BCM ISO files
-    iso_patterns = [
-        r"bcm.*10.*\.iso",
-        r"bcm.*11.*\.iso", 
-        r"bright.*10.*\.iso",
-        r"bright.*11.*\.iso",
-        r".*bcm.*\.iso",
-        r".*bright.*cluster.*\.iso",
-    ]
-    
     iso_files = list(iso_dir.glob("*.iso"))
     
     if not iso_files:
         return False, "No .iso files found in .iso/ directory"
     
-    # Check if any match BCM patterns
-    bcm_isos = []
+    # Parse BCM ISOs and group by major version
+    bcm10_isos = []
+    bcm11_isos = []
+    other_isos = []
+    
     for iso_file in iso_files:
-        name_lower = iso_file.name.lower()
-        # Check for BCM version indicators
-        if "bcm" in name_lower or "bright" in name_lower:
-            # Try to detect version
-            if "10" in name_lower or "v10" in name_lower:
-                bcm_isos.append((iso_file.name, "10"))
-            elif "11" in name_lower or "v11" in name_lower:
-                bcm_isos.append((iso_file.name, "11"))
-            else:
-                bcm_isos.append((iso_file.name, "unknown"))
+        major, full_version = parse_bcm_iso_version(iso_file.name)
+        size_gb = iso_file.stat().st_size / (1024**3)
+        
+        if major == '10':
+            bcm10_isos.append((iso_file.name, full_version, size_gb))
+        elif major == '11':
+            bcm11_isos.append((iso_file.name, full_version, size_gb))
+        else:
+            other_isos.append(iso_file.name)
     
-    if bcm_isos:
-        versions = ", ".join([f"{name} (v{ver})" for name, ver in bcm_isos])
-        return True, f"Found: {versions}"
+    if not bcm10_isos and not bcm11_isos:
+        if other_isos:
+            return True, f"Found ISO(s) but version unclear: {', '.join(other_isos[:3])}"
+        return False, "No BCM ISOs found"
     
-    # Fall back to any ISO file
-    iso_names = ", ".join([f.name for f in iso_files[:3]])
-    if len(iso_files) > 3:
-        iso_names += f" (+{len(iso_files) - 3} more)"
-    return True, f"Found ISO(s): {iso_names} (verify BCM version)"
+    # Build detailed message
+    parts = []
+    
+    if bcm10_isos:
+        if len(bcm10_isos) == 1:
+            name, ver, size = bcm10_isos[0]
+            parts.append(f"BCM 10: {ver} ({size:.1f}GB)")
+        else:
+            versions = ", ".join([v for _, v, _ in bcm10_isos])
+            parts.append(f"BCM 10: {len(bcm10_isos)} ISOs ({versions})")
+    
+    if bcm11_isos:
+        if len(bcm11_isos) == 1:
+            name, ver, size = bcm11_isos[0]
+            parts.append(f"BCM 11: {ver} ({size:.1f}GB)")
+        else:
+            versions = ", ".join([v for _, v, _ in bcm11_isos])
+            parts.append(f"BCM 11: {len(bcm11_isos)} ISOs ({versions})")
+    
+    return True, " | ".join(parts)
 
 
 def check_uv():
