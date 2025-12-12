@@ -1,3 +1,0 @@
-[submodule "bcm-ansible-installer"]
-	path = bcm-ansible-installer
-	url = https://github.com/twilson217/bcm-ansible-installer.git
