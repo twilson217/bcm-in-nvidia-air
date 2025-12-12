@@ -62,6 +62,14 @@ apt-get update -qq
 echo "  Upgrading system packages..."
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y -qq
 
+# Ensure we never keep both libglapi-amber and libglapi-mesa installed together.
+# On Ubuntu 24.04 these can conflict and leave apt in a broken state.
+echo "  Checking for libglapi-amber/libglapi-mesa conflicts..."
+if dpkg -s libglapi-amber >/dev/null 2>&1 && dpkg -s libglapi-mesa >/dev/null 2>&1; then
+    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-mesa..."
+    apt-get remove -y -qq libglapi-mesa >/dev/null 2>&1 || true
+fi
+
 # Fix any broken dependencies
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install -y -qq || true
 
@@ -233,10 +241,8 @@ patch_collection_remove_pkg() {
     fi
 }
 
-if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
-    echo "  Applying Ansible collection patch for BCM ${BCM_FULL_VERSION}..."
-    patch_collection_remove_pkg "libglapi-mesa"
-fi
+echo "  Applying Ansible collection patch (prevent libglapi-mesa install)..."
+patch_collection_remove_pkg "libglapi-mesa"
 
 
 # Step 8: Create configuration files
