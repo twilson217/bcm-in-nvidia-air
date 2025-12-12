@@ -55,18 +55,17 @@ echo "[Step 3/10] Installing system dependencies..."
 
 # Make apt fully non-interactive (no prompts for config file changes, etc.)
 export DEBIAN_FRONTEND=noninteractive
-APT_OPTS='-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"'
 
 apt-get update -qq
 
 # Upgrade all packages to latest versions (important for BCM 10.24.x compatibility)
 echo "  Upgrading system packages..."
-apt-get $APT_OPTS upgrade -y -qq
+apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y -qq
 
 # Fix any broken dependencies
-apt-get $APT_OPTS --fix-broken install -y -qq || true
+apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install -y -qq || true
 
-apt-get $APT_OPTS install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
+apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
 pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
 
