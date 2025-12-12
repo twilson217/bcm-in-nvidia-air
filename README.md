@@ -26,7 +26,7 @@ This solution automates the complete BCM deployment process:
 - [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer110/) - Ansible Galaxy collection for BCM 11.x
 
 **Included Submodule:**
-- `bcm-ansible-installer/` - Ansible scaffolding for BCM installation (included as a git submodule)
+- [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) - Ansible scaffolding for BCM installation (cloned on remote host during install)
 
 **Note on Free Tier:** The external air.nvidia.com site may have limitations on free accounts (e.g., cloud-init/UserConfig may not be available). The script includes fallback mechanisms for password and SSH key configuration.
 
@@ -46,15 +46,10 @@ This solution automates the complete BCM deployment process:
 
 ### Installation
 
-1. Clone this repository (with submodules):
+1. Clone this repository:
 ```bash
-git clone --recurse-submodules https://gitlab-master.nvidia.com/travisw/bcm-in-nvidia-air.git
+git clone https://gitlab-master.nvidia.com/travisw/bcm-in-nvidia-air.git
 cd bcm-in-nvidia-air
-```
-
-   If you already cloned without `--recurse-submodules`, initialize the submodule:
-```bash
-git submodule update --init
 ```
 
 2. Install uv (fast Python package installer):
@@ -167,7 +162,7 @@ The script will:
 4. Wait for simulation to load and nodes to boot
 5. Upload your BCM ISO to the head node via rsync (~10-20 min for 5GB)
 6. Execute BCM installation script on head node (~30-45 min)
-   - Uploads bcm-ansible-installer submodule to head node
+   - Clones bcm-ansible-installer from GitHub
    - Installs Ansible Galaxy collection
    - Runs official BCM installation playbook
 7. Configure passwords, DNS, and TFTP
@@ -277,7 +272,7 @@ The default topology (`topologies/default.json`) creates the following environme
 
 **Scripts:**
 - `scripts/bcm_install.sh` - BCM installation script (runs on head node)
-  - Uses bcm-ansible-installer (uploaded from submodule)
+  - Clones bcm-ansible-installer from GitHub
   - Generates cluster credentials and settings
   - Runs official BCM Ansible playbook locally
 - `scripts/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
@@ -681,9 +676,8 @@ bcm-in-nvidia-air/
 ├── .env                           # Your environment config (create from sample-configs/env.example)
 ├── cloud-init-password.yaml       # Your config with SSH key (auto-generated)
 │
-├── bcm-ansible-installer/         # Git submodule: Ansible scaffolding for BCM
-│   ├── playbook.yml               # Main Ansible playbook
-│   ├── inventory/hosts            # Ansible inventory
+├── # bcm-ansible-installer is cloned on remote host from:
+│   # https://github.com/twilson217/bcm-ansible-installer
 │   ├── ansible.cfg                # Ansible configuration
 │   └── requirements-control-node.txt  # Python dependencies for Ansible
 │
@@ -730,14 +724,14 @@ The deployment uses a two-phase approach:
 6. Uploads installation script with your credentials
 
 **Phase 2: BCM Installation (on head node)**
-1. Uses bcm-ansible-installer (uploaded from submodule during Phase 1)
+1. Clones bcm-ansible-installer from GitHub
 2. Installs Ansible Galaxy collection (`brightcomputing.installer100` or `installer110`)
 3. Generates cluster credentials and network settings from topology
 4. Runs official BCM Ansible playbook locally
 5. Configures DNS, TFTP, and passwords
 
-**bcm-ansible-installer Submodule:**
-The `bcm-ansible-installer/` submodule provides minimal scaffolding for the Ansible installation:
+**bcm-ansible-installer Repository:**
+The [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) repo is cloned on the remote host and provides minimal scaffolding for the Ansible installation:
 - `playbook.yml` - Calls the Galaxy collection role
 - `inventory/hosts` - Defines head_node target
 - `requirements-control-node.txt` - Python dependencies
