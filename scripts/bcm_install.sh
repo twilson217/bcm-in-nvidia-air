@@ -52,16 +52,21 @@ echo "  ✓ IPv4 forced for apt"
 
 # Step 3: Update system and install dependencies
 echo "[Step 3/10] Installing system dependencies..."
+
+# Make apt fully non-interactive (no prompts for config file changes, etc.)
+export DEBIAN_FRONTEND=noninteractive
+APT_OPTS='-o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"'
+
 apt-get update -qq
 
 # Upgrade all packages to latest versions (important for BCM 10.24.x compatibility)
 echo "  Upgrading system packages..."
-apt-get upgrade -y -qq
+apt-get $APT_OPTS upgrade -y -qq
 
 # Fix any broken dependencies
-apt-get --fix-broken install -y -qq || true
+apt-get $APT_OPTS --fix-broken install -y -qq || true
 
-apt-get install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
+apt-get $APT_OPTS install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
 pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
 
