@@ -1392,9 +1392,6 @@ class AirBCMDeployer:
                 for name, reason in skipped_nodes:
                     print(f"    - {name} ({reason})")
             
-            # Clean up temp file
-            temp_cloudinit.unlink(missing_ok=True)
-            
             if configured_count > 0:
                 print(f"\n  ✓ Cloud-init configured on {configured_count} nodes")
                 print(f"  ℹ Passwords will be set when nodes boot (or rebuild existing nodes)")
