@@ -1271,7 +1271,16 @@ class AirBCMDeployer:
                 )
                 print(f"    ✓ Created UserConfig: {userdata.id}")
             except Exception as e:
+                error_str = str(e).lower()
                 print(f"    ⚠ Error creating UserConfig: {e}")
+                
+                # Check for permission/quota errors (likely free tier limitation)
+                if '403' in str(e) or 'forbidden' in error_str or 'permission' in error_str or 'quota' in error_str:
+                    print(f"\n    ℹ This may be a free tier limitation on air.nvidia.com")
+                    print(f"    ℹ Cloud-init/UserConfig may require a paid subscription")
+                    print(f"    ℹ The script will continue with default passwords")
+                    return False
+                
                 # Try to get existing one with same name
                 try:
                     configs = air.user_configs.list()
@@ -1282,7 +1291,11 @@ class AirBCMDeployer:
                             break
                     else:
                         raise Exception("Could not create or find UserConfig")
-                except:
+                except Exception as list_err:
+                    print(f"    ⚠ Could not list UserConfigs: {list_err}")
+                    if '403' in str(list_err) or 'forbidden' in str(list_err).lower():
+                        print(f"\n    ℹ UserConfig API appears to be restricted for this account")
+                        print(f"    ℹ This is likely a free tier limitation on air.nvidia.com")
                     return False
             
             # Get simulation nodes
@@ -2060,8 +2073,12 @@ Examples:
         
         # If cloud-init didn't work, fallback to SSH-based password configuration
         if not cloudinit_success:
-            print("\n⚠ Cloud-init configuration failed, using SSH fallback...")
-            deployer.configure_node_passwords(ssh_info)
+            print("\n⚠ Cloud-init configuration failed")
+            print("  Note: On air.nvidia.com free tier, cloud-init may not be available")
+            print("  Attempting SSH fallback for password configuration...")
+            if not deployer.configure_node_passwords(ssh_info):
+                print("\n  ℹ Continuing with default password 'nvidia'")
+                print("  ℹ You can change it manually after connecting")
         else:
             print("\n✓ Passwords configured via cloud-init (set at boot time)")
         
