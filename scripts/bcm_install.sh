@@ -2,10 +2,11 @@
 # BCM Installation Script for NVIDIA Air
 # This script runs LOCALLY on the BCM head node
 # Placeholders are replaced by deploy_bcm_air.py before upload:
-#   __PASSWORD__     - User's configured password
-#   __PRODUCT_KEY__  - BCM license key
-#   __BCM_VERSION__  - 10 or 11
-#   __ADMIN_EMAIL__  - Admin email address
+#   __PASSWORD__        - User's configured password
+#   __PRODUCT_KEY__     - BCM license key
+#   __BCM_VERSION__     - Major version (10 or 11)
+#   __BCM_FULL_VERSION__- Full version (e.g., 10.24.03, 10.30.0, 11.0.0)
+#   __ADMIN_EMAIL__     - Admin email address
 
 set -euo pipefail
 
@@ -13,6 +14,7 @@ set -euo pipefail
 BCM_PASSWORD="__PASSWORD__"
 BCM_PRODUCT_KEY="__PRODUCT_KEY__"
 BCM_VERSION="__BCM_VERSION__"
+BCM_FULL_VERSION="__BCM_FULL_VERSION__"
 BCM_ADMIN_EMAIL="__ADMIN_EMAIL__"
 BCM_EXTERNAL_INTERFACE="__EXTERNAL_INTERFACE__"  # Connected to outbound (DHCP)
 BCM_MANAGEMENT_INTERFACE="__MANAGEMENT_INTERFACE__"  # Connected to oob-mgmt-switch (192.168.200.254)
@@ -55,21 +57,24 @@ apt-get install -y -qq python3 python3-pip python3-venv git mysql-server rsync l
 pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
 
-# Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x)
+# Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x only)
 # libglapi-amber and libglapi-mesa are mutually exclusive
-# The BCM Ansible collection tries to install both, causing failure
-# Working BCM 10.30.0 systems use libglapi-amber (not mesa)
-# Solution: Pre-install the amber packages and pin libglapi-mesa to prevent installation
-echo "  Applying Ubuntu 24.04 package conflict workaround..."
-apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
-# Pin libglapi-mesa to prevent it from being installed (apt preferences)
-cat > /etc/apt/preferences.d/bcm-block-libglapi-mesa << 'PINEOF'
-# Block libglapi-mesa to avoid conflict with libglapi-amber (BCM requirement)
+# The BCM 10.24.x Ansible collection tries to install both, causing failure
+# BCM 10.30.0 and 11.x don't have this issue
+if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
+    echo "  Applying Ubuntu 24.04 package conflict workaround for BCM ${BCM_FULL_VERSION}..."
+    apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+    # Pin libglapi-mesa to prevent it from being installed (apt preferences)
+    cat > /etc/apt/preferences.d/bcm-block-libglapi-mesa << 'PINEOF'
+# Block libglapi-mesa to avoid conflict with libglapi-amber (BCM 10.24.x requirement)
 Package: libglapi-mesa
 Pin: release *
 Pin-Priority: -1
 PINEOF
-echo "  ✓ Package conflict workaround applied"
+    echo "  ✓ Package conflict workaround applied"
+else
+    echo "  ℹ BCM ${BCM_FULL_VERSION} - no package workaround needed"
+fi
 
 # Step 4: Secure MySQL installation
 echo "[Step 4/10] Securing MySQL..."

@@ -1812,6 +1812,7 @@ Host bcm
         script_content = script_content.replace('__PASSWORD__', self.default_password)
         script_content = script_content.replace('__PRODUCT_KEY__', self.bcm_product_key)
         script_content = script_content.replace('__BCM_VERSION__', major_version)
+        script_content = script_content.replace('__BCM_FULL_VERSION__', bcm_version)
         script_content = script_content.replace('__ADMIN_EMAIL__', self.bcm_admin_email)
         script_content = script_content.replace('__EXTERNAL_INTERFACE__', self.bcm_outbound_interface)
         script_content = script_content.replace('__MANAGEMENT_INTERFACE__', self.bcm_management_interface)
