@@ -71,26 +71,47 @@ echo "  ✓ Dependencies installed"
 
 # Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x only)
 # libglapi-amber and libglapi-mesa are mutually exclusive
-# The BCM 10.24.x ISO selection files require both, causing failure
-# BCM 10.30.0 and 11.x don't have this issue
+# The BCM 10.24.x Ansible role tries to install packages requiring both
+# Solution: Create dummy libglapi-mesa FIRST, then install libglapi-amber
 if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
     echo "  Applying Ubuntu 24.04 package conflict workaround for BCM ${BCM_FULL_VERSION}..."
     
-    # Install the amber packages (what working BCM 10.30.0 uses)
-    apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+    # Step 1: Install equivs to create dummy packages
+    apt-get install -y equivs >/dev/null 2>&1
     
-    # Pin libglapi-mesa to prevent installation (conflicts with amber)
-    cat > /etc/apt/preferences.d/bcm-block-libglapi-mesa << 'PINEOF'
-# Block libglapi-mesa to avoid conflict with libglapi-amber (BCM 10.24.x)
+    # Step 2: Create dummy libglapi-mesa package FIRST
+    # This satisfies any dependency on libglapi-mesa without the actual package
+    mkdir -p /tmp/dummy-pkg
+    cat > /tmp/dummy-pkg/libglapi-mesa << 'CTRLEOF'
+Section: libs
+Priority: optional
+Standards-Version: 3.9.2
+
 Package: libglapi-mesa
-Pin: release *
-Pin-Priority: -1
-PINEOF
+Version: 99.0.0
+Provides: libglapi-mesa
+Replaces: libglapi-mesa
+Conflicts: libglapi-mesa
+Description: Dummy package to satisfy BCM 10.24.x dependency
+ Prevents real libglapi-mesa from being installed (conflicts with libglapi-amber).
+CTRLEOF
     
-    # Pre-install problematic packages without version constraints
-    # BCM 10.24.x ISO requires specific versions that may not exist in Ubuntu 24.04 repos
+    cd /tmp/dummy-pkg
+    equivs-build libglapi-mesa >/dev/null 2>&1
+    dpkg -i libglapi-mesa_99.0.0_all.deb >/dev/null 2>&1 || true
+    cd - >/dev/null
+    echo "  ✓ Dummy libglapi-mesa installed (satisfies dependency)"
+    
+    # Step 3: Now install libglapi-amber (won't conflict with our dummy)
+    apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+    echo "  ✓ libglapi-amber installed"
+    
+    # Step 4: Pre-install problematic packages without version constraints
     echo "  Pre-installing packages with version mismatches..."
     apt-get install -y libxml2-dev libxslt1-dev libuser1 libicu-dev >/dev/null 2>&1 || true
+    
+    # Step 5: Fix any broken deps after our workaround
+    apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install -y -qq || true
     
     echo "  ✓ Package conflict workaround applied"
 else
@@ -160,36 +181,63 @@ export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
 ansible-galaxy collection install "${BCM_COLLECTION}" --force
 echo "  ✓ Collection installed: ${BCM_COLLECTION}"
 
-# For BCM 10.24.x: Create a dummy libglapi-mesa package to satisfy the dependency
-# The 10.24.x ISO selection files require libglapi-mesa, but it conflicts with libglapi-amber
-# We use equivs to create a dummy package that satisfies the requirement without installing the real thing
-if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
-    echo "  Creating dummy libglapi-mesa package for BCM ${BCM_FULL_VERSION}..."
-    apt-get install -y equivs >/dev/null 2>&1
-    
-    # Create control file for dummy package
-    mkdir -p /tmp/dummy-libglapi-mesa
-    cat > /tmp/dummy-libglapi-mesa/libglapi-mesa-dummy << 'CTRLEOF'
-Section: libs
-Priority: optional
-Standards-Version: 3.9.2
+#
+# BCM 10.24.x on Ubuntu 24.04:
+# The installer100 collection may attempt to install libglapi-mesa alongside libglapi-amber.
+# Those packages conflict (mutually exclusive) on Ubuntu 24.04. To prevent this, we patch the
+# installed Ansible collection in-place to remove references to libglapi-mesa before running
+# the playbook.
+#
+patch_collection_remove_pkg() {
+    local pkg="$1"
+    local col_dir=""
 
-Package: libglapi-mesa
-Version: 99.0.0
-Provides: libglapi-mesa
-Description: Dummy package to satisfy BCM 10.24.x dependency
- This is a dummy package that provides libglapi-mesa without
- actually installing it, to avoid conflicts with libglapi-amber
- on Ubuntu 24.04.
-CTRLEOF
-    
-    # Build and install the dummy package
-    cd /tmp/dummy-libglapi-mesa
-    equivs-build libglapi-mesa-dummy >/dev/null 2>&1
-    dpkg -i libglapi-mesa_99.0.0_all.deb >/dev/null 2>&1 || true
-    cd - >/dev/null
-    echo "  ✓ Dummy libglapi-mesa package installed"
+    # Collection can be installed under root or ubuntu, depending on how this script is executed.
+    local candidates=(
+        "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+    )
+
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            col_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$col_dir" ]; then
+        echo "  ⚠ Could not locate installed Ansible collection directory for ${BCM_COLLECTION}"
+        return 0
+    fi
+
+    echo "  Patching collection at: ${col_dir}"
+
+    # Find any files referencing the package and remove those lines.
+    # This is intentionally blunt: if the collection is listing the package, we strip it.
+    local files
+    files="$(grep -RIl -- "${pkg}" "${col_dir}" || true)"
+    if [ -z "$files" ]; then
+        echo "  ✓ No ${pkg} references found in collection"
+        return 0
+    fi
+
+    echo "  Removing ${pkg} references from collection files..."
+    while IFS= read -r f; do
+        sed -i "/${pkg}/d" "$f" || true
+    done <<< "$files"
+
+    if grep -RIl -- "${pkg}" "${col_dir}" >/dev/null 2>&1; then
+        echo "  ⚠ ${pkg} still referenced after patch (continuing anyway)"
+    else
+        echo "  ✓ ${pkg} successfully removed from collection"
+    fi
+}
+
+if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
+    echo "  Applying Ansible collection patch for BCM ${BCM_FULL_VERSION}..."
+    patch_collection_remove_pkg "libglapi-mesa"
 fi
+
 
 # Step 8: Create configuration files
 echo "[Step 8/10] Creating BCM configuration..."
