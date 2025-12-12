@@ -58,11 +58,12 @@ echo "  ✓ Dependencies installed"
 # Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x)
 # libglapi-amber and libglapi-mesa are mutually exclusive
 # The BCM Ansible collection tries to install both, causing failure
-# Solution: Pre-install libglapi-mesa and hold the conflicting packages
+# Working BCM 10.30.0 systems use libglapi-amber (not mesa)
+# Solution: Pre-install the amber packages and hold libglapi-mesa
 echo "  Applying Ubuntu 24.04 package conflict workaround..."
-apt-get install -y libglapi-mesa >/dev/null 2>&1 || true
-# Hold the amber packages to prevent Ansible from installing them
-apt-mark hold libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+# Hold libglapi-mesa to prevent Ansible from installing it (conflicts with amber)
+apt-mark hold libglapi-mesa >/dev/null 2>&1 || true
 echo "  ✓ Package conflict workaround applied"
 
 # Step 4: Secure MySQL installation
