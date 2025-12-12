@@ -114,14 +114,25 @@ BCM_ADMIN_EMAIL=your_email@nvidia.com
 mkdir -p .iso
 
 # Copy or move your downloaded BCM ISO
-# For BCM 10.x:
 cp ~/Downloads/bcm-10.0-ubuntu2404.iso .iso/
-
-# For BCM 11.x:
 cp ~/Downloads/bcm-11.0-ubuntu2404.iso .iso/
 ```
 
-The script will automatically detect the ISO matching your selected BCM version.
+**ISO Filename Patterns:**
+
+The script auto-detects ISO files based on filename patterns. Supported formats:
+
+| Pattern | Example | Version Detected |
+|---------|---------|------------------|
+| `bcm-MAJOR.MINOR.PATCH-*.iso` | `bcm-10.30.0-ubuntu2404.iso` | 10.30.0 |
+| `bcm-MAJOR.MINOR-*.iso` | `bcm-10.30-ubuntu2404.iso` | 10.30.0 |
+| `bcm-MAJOR.MINOR.PATCH.iso` | `bcm-10.30.0.iso` | 10.30.0 |
+| `bcmMAJOR.MINOR.PATCH.iso` | `bcm10.30.0.iso` | 10.30.0 |
+
+**If you have multiple ISOs of the same major version** (e.g., both 10.24 and 10.30):
+- Rename them to include the full version: `bcm-10.24.03-ubuntu2404.iso`, `bcm-10.30.0-ubuntu2404.iso`
+- Use `--bcm-version 10.24.03` or `--bcm-version 10.30.0` to select the specific release
+- In non-interactive mode (`-y`), you must specify the exact version if multiple ISOs exist
 
 8. **(Optional)** Verify your setup:
 ```bash
@@ -277,8 +288,10 @@ The default topology (`topologies/default.json`) creates the following environme
 
 **ISO Directory:**
 - `.iso/` - Place your BCM ISO files here (gitignored)
-  - `bcm-10.0-ubuntu2404.iso` - BCM 10.x ISO
-  - `bcm-11.0-ubuntu2404.iso` - BCM 11.x ISO
+  - `bcm-10.30.0-ubuntu2404.iso` - BCM 10.x ISO (example)
+  - `bcm-10.24.03-ubuntu2404.iso` - Another BCM 10.x release (example)
+  - `bcm-11.0-ubuntu2404.iso` - BCM 11.x ISO (example)
+  - See "ISO Filename Patterns" above for supported naming conventions
 
 **Tools:**
 **Testing/Debug Scripts:**
