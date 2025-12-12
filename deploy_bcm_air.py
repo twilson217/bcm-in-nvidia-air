@@ -1212,20 +1212,128 @@ class AirBCMDeployer:
             print(f"  Warning: Could not retrieve SSH service info: {e}")
             return None
     
+    def ensure_userconfig(self):
+        """
+        Ensure the UserConfig for cloud-init exists (create or find).
+        
+        UserConfigs are user-level (not simulation-specific), so this can be
+        called BEFORE simulation creation to avoid rate limiting issues.
+        
+        Returns:
+            userconfig_id if successful, None otherwise
+        """
+        print("\nEnsuring cloud-init UserConfig exists...")
+        print(f"  Target password: {self.default_password}")
+        
+        # Ensure cloud-init config exists (auto-generate from template if needed)
+        try:
+            cloudinit_template_path = self.ensure_cloud_init_config()
+        except FileNotFoundError as e:
+            print(f"  ⚠ {e}")
+            return None
+        
+        # Read template and substitute password
+        cloudinit_template = cloudinit_template_path.read_text()
+        cloudinit_content = cloudinit_template.replace('{PASSWORD}', self.default_password)
+        
+        userdata_name = "bcm-cloudinit-password"  # Fixed name for reuse
+        
+        headers = {
+            "Authorization": f"Bearer {self.jwt_token}",
+            "Content-Type": "application/json"
+        }
+        
+        userdata_id = None
+        
+        # First, check if we already have this config (avoids 403 on create)
+        try:
+            print("  Checking for existing UserConfig...")
+            list_response = requests.get(
+                f"{self.api_base_url}/api/v2/userconfigs/",
+                headers=headers,
+                timeout=30
+            )
+            if list_response.status_code == 200:
+                for cfg in list_response.json().get('results', []):
+                    if cfg.get('name') == userdata_name:
+                        userdata_id = cfg.get('id')
+                        print(f"    ✓ Found existing UserConfig: {userdata_id}")
+                        
+                        # Update the content in case password changed
+                        update_response = requests.patch(
+                            f"{self.api_base_url}/api/v2/userconfigs/{userdata_id}/",
+                            headers=headers,
+                            json={"content": cloudinit_content},
+                            timeout=30
+                        )
+                        if update_response.status_code == 200:
+                            print(f"    ✓ Updated UserConfig content")
+                        break
+            elif list_response.status_code == 403:
+                print(f"    ⚠ Cannot list UserConfigs (403 - may be free tier limitation)")
+        except Exception as e:
+            if os.getenv('DEBUG'):
+                print(f"    [DEBUG] List failed: {e}")
+        
+        # If not found, try to create it
+        if not userdata_id:
+            print("  Creating new UserConfig...")
+            payload = {
+                "name": userdata_name,
+                "kind": "cloud-init-user-data",
+                "organization": None,  # Must be explicitly sent, not omitted
+                "content": cloudinit_content
+            }
+            
+            if os.getenv('DEBUG'):
+                print(f"    [DEBUG] POST {self.api_base_url}/api/v2/userconfigs/")
+                print(f"    [DEBUG] Content size: {len(cloudinit_content)} bytes")
+            
+            response = requests.post(
+                f"{self.api_base_url}/api/v2/userconfigs/",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            if response.status_code == 201:
+                userdata_id = response.json().get('id')
+                print(f"    ✓ Created UserConfig: {userdata_id}")
+            else:
+                error_str = response.text.lower()
+                print(f"    ⚠ Error creating UserConfig: {response.status_code}")
+                
+                if response.status_code == 403 or 'forbidden' in error_str or 'permission' in error_str:
+                    print(f"\n    ℹ This may be a free tier limitation on air.nvidia.com")
+                    print(f"    ℹ Cloud-init/UserConfig may require a paid subscription")
+                    print(f"    ℹ The script will continue with default passwords")
+                else:
+                    print(f"    Response: {response.text[:300]}")
+        
+        # Store for later use
+        self.userconfig_id = userdata_id
+        return userdata_id
+    
     def configure_node_passwords_cloudinit(self):
         """
-        Configure passwords on nodes using cloud-init via Air SDK (preferred method)
-        This sets passwords at boot time, before any SSH attempts
+        Assign cloud-init UserConfig to simulation nodes.
         
-        Uses the Air SDK UserConfig API to:
-        1. Create a cloud-init user-data script with password configuration
-        2. Assign the script to relevant nodes
+        Requires:
+        - self.userconfig_id to be set (call ensure_userconfig() first)
+        - Simulation to exist (self.simulation_id)
         
         Returns:
             True if successful, False otherwise
         """
-        print("\nConfiguring node passwords via cloud-init...")
-        print(f"  Target password: {self.default_password}")
+        print("\nAssigning cloud-init to simulation nodes...")
+        
+        # Check if we have a UserConfig to assign
+        userdata_id = getattr(self, 'userconfig_id', None)
+        if not userdata_id:
+            print("  ⚠ No UserConfig available (ensure_userconfig() not called or failed)")
+            return False
+        
+        print(f"  Using UserConfig: {userdata_id}")
         
         try:
             from air_sdk import AirApi
@@ -1233,108 +1341,7 @@ class AirBCMDeployer:
             print("  ⚠ air_sdk not installed. Install with: pip install air-sdk")
             return False
         
-        # Ensure cloud-init config exists (auto-generate from template if needed)
         try:
-            cloudinit_template_path = self.ensure_cloud_init_config()
-        except FileNotFoundError as e:
-            print(f"  ⚠ {e}")
-            return False
-        
-        # Read template and substitute password
-        cloudinit_template = cloudinit_template_path.read_text()
-        cloudinit_content = cloudinit_template.replace('{PASSWORD}', self.default_password)
-        
-        # Write to temp file for SDK (SDK expects file path or file handle)
-        temp_cloudinit = Path('/tmp/air_cloudinit_password.yaml')
-        temp_cloudinit.write_text(cloudinit_content)
-        
-        try:
-            # UserConfigs are user-level, not simulation-specific!
-            # We can create once and reuse across all simulations.
-            # Use a fixed name so we can find and reuse existing configs.
-            print("  Creating/finding cloud-init user-data script...")
-            userdata_name = "bcm-cloudinit-password"  # Fixed name for reuse
-            
-            headers = {
-                "Authorization": f"Bearer {self.jwt_token}",
-                "Content-Type": "application/json"
-            }
-            
-            userdata_id = None
-            
-            # First, check if we already have this config (avoids 403 on create)
-            try:
-                list_response = requests.get(
-                    f"{self.api_base_url}/api/v2/userconfigs/",
-                    headers=headers,
-                    timeout=30
-                )
-                if list_response.status_code == 200:
-                    for cfg in list_response.json().get('results', []):
-                        if cfg.get('name') == userdata_name:
-                            userdata_id = cfg.get('id')
-                            print(f"    ✓ Found existing UserConfig: {userdata_id}")
-                            
-                            # Update the content in case password changed
-                            update_response = requests.patch(
-                                f"{self.api_base_url}/api/v2/userconfigs/{userdata_id}/",
-                                headers=headers,
-                                json={"content": cloudinit_content},
-                                timeout=30
-                            )
-                            if update_response.status_code == 200:
-                                print(f"    ✓ Updated UserConfig content")
-                            break
-            except Exception as e:
-                if os.getenv('DEBUG'):
-                    print(f"    [DEBUG] List failed: {e}")
-            
-            # If not found, try to create it
-            if not userdata_id:
-                # API requires organization field to be explicitly present (can be null)
-                payload = {
-                    "name": userdata_name,
-                    "kind": "cloud-init-user-data",
-                    "organization": None,  # Must be explicitly sent, not omitted
-                    "content": cloudinit_content
-                }
-                
-                try:
-                    # Debug: show request details
-                    if os.getenv('DEBUG'):
-                        print(f"    [DEBUG] POST {self.api_base_url}/api/v2/userconfigs/")
-                        print(f"    [DEBUG] Token: {self.jwt_token[:20]}...")
-                        print(f"    [DEBUG] Content size: {len(cloudinit_content)} bytes")
-                    
-                    response = requests.post(
-                        f"{self.api_base_url}/api/v2/userconfigs/",
-                        headers=headers,
-                        json=payload,
-                        timeout=30
-                    )
-                    
-                    if response.status_code == 201:
-                        userdata_id = response.json().get('id')
-                        print(f"    ✓ Created UserConfig: {userdata_id}")
-                    else:
-                        raise Exception(f"API returned {response.status_code}: {response.text}")
-                    
-            except Exception as e:
-                error_str = str(e).lower()
-                print(f"    ⚠ Error creating UserConfig: {e}")
-                
-                # Check for permission/quota errors (likely free tier limitation)
-                if '403' in str(e) or 'forbidden' in error_str or 'permission' in error_str or 'quota' in error_str:
-                    print(f"\n    ℹ This may be a free tier limitation on air.nvidia.com")
-                    print(f"    ℹ Cloud-init/UserConfig may require a paid subscription")
-                    print(f"    ℹ The script will continue with default passwords")
-                    return False
-                raise
-            
-            if not userdata_id:
-                print(f"    ⚠ Could not create or find UserConfig")
-                return False
-            
             # Initialize Air SDK for node operations
             print("  Connecting to Air SDK...")
             air = AirApi(
@@ -2222,14 +2229,21 @@ Examples:
             deployer.bcm_node_name = progress.get('bcm_node_name', 'bcm-01')
             deployer.bcm_outbound_interface = progress.get('bcm_outbound_interface', 'eth0')
             deployer.bcm_management_interface = progress.get('bcm_management_interface', 'eth0')
+            deployer.userconfig_id = progress.get('userconfig_id')
             print(f"  [resume] Simulation ID: {deployer.simulation_id}")
             print(f"  [resume] BCM outbound interface: {deployer.bcm_outbound_interface}")
             print(f"  [resume] BCM management interface: {deployer.bcm_management_interface}")
+            if deployer.userconfig_id:
+                print(f"  [resume] UserConfig ID: {deployer.userconfig_id}")
         else:
             topology_file = Path(args.topology_file)
             if not topology_file.exists():
                 print(f"\n✗ Error: Topology file not found: {topology_file}")
                 sys.exit(1)
+            
+            # Step: Ensure UserConfig exists BEFORE simulation (avoids rate limiting)
+            # UserConfigs are user-level, not simulation-specific
+            userconfig_id = deployer.ensure_userconfig()
             
             deployer.create_simulation(topology_file, simulation_name)
             progress.complete_step('simulation_created', 
@@ -2237,11 +2251,13 @@ Examples:
                                    simulation_name=simulation_name,
                                    bcm_node_name=deployer.bcm_node_name,
                                    bcm_outbound_interface=deployer.bcm_outbound_interface,
-                                   bcm_management_interface=deployer.bcm_management_interface)
+                                   bcm_management_interface=deployer.bcm_management_interface,
+                                   userconfig_id=userconfig_id)
         
-        # Step: Configure cloud-init
+        # Step: Assign cloud-init to nodes (needs simulation to exist)
         if args.resume and progress.is_step_completed('cloudinit_configured'):
             cloudinit_success = progress.get('cloudinit_success', False)
+            deployer.userconfig_id = progress.get('userconfig_id')
             print(f"  [resume] Cloud-init configured: {cloudinit_success}")
         else:
             cloudinit_success = deployer.configure_node_passwords_cloudinit()
