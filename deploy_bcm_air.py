@@ -1387,145 +1387,151 @@ class AirBCMDeployer:
             ssh_pubkey = Path(self.ssh_public_key).expanduser().read_text().strip()
             print(f"  SSH public key: {self.ssh_public_key}")
         
-        # Create expect script that:
-        # 1. Handles password change prompt (if any)
-        # 2. Changes password with passwd command
-        # 3. Adds SSH public key
-        expect_script = f'''#!/usr/bin/expect -f
-set timeout 60
-set host "{ssh_info['hostname']}"
-set port "{ssh_info['port']}"
-set default_pass "nvidia"
-set new_pass "{self.default_password}"
-set pubkey "{ssh_pubkey if ssh_pubkey else ''}"
+        # Create a shell script to run on the remote host
+        setup_script_content = f'''#!/bin/bash
+set -e
 
-# Connect to the BCM head node
-spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $port ubuntu@$host
+echo "Configuring BCM head node..."
 
-# Handle various prompts
-expect {{
-    # Password change required on first login
-    "Current password:" {{
-        send "$default_pass\\r"
-        expect "New password:"
-        send "$new_pass\\r"
-        expect "Retype new password:"
-        send "$new_pass\\r"
-        exp_continue
-    }}
-    # Normal password prompt
-    "password:" {{
-        send "$default_pass\\r"
-        exp_continue
-    }}
-    # Got a shell prompt - we're logged in
-    "\\$" {{
-        # Continue to configure
-    }}
-    timeout {{
-        puts "\\n⚠ Timeout connecting"
-        exit 1
-    }}
-    eof {{
-        puts "\\n⚠ Connection closed unexpectedly"
-        exit 1
-    }}
-}}
+# Change ubuntu password
+echo "ubuntu:{self.default_password}" | sudo chpasswd
+echo "  ✓ Ubuntu password changed"
 
-# Now we should be logged in, configure the node
-puts "\\n  ✓ Connected to BCM head node"
+# Change root password  
+echo "root:{self.default_password}" | sudo chpasswd
+echo "  ✓ Root password changed"
 
-# Change password using passwd command (in case it wasn't prompted)
-send "echo '$default_pass' | sudo -S bash -c \\"echo 'ubuntu:$new_pass' | chpasswd\\"\\r"
-expect "\\$"
-puts "  ✓ Password updated"
+# Enable root SSH login
+sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+echo "  ✓ Root SSH login enabled"
 
-# Add SSH public key if provided
-if {{ $pubkey ne "" }} {{
-    send "mkdir -p ~/.ssh && chmod 700 ~/.ssh\\r"
-    expect "\\$"
-    send "echo '$pubkey' >> ~/.ssh/authorized_keys\\r"
-    expect "\\$"
-    send "chmod 600 ~/.ssh/authorized_keys\\r"
-    expect "\\$"
-    send "sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys\\r"
-    expect "\\$"
-    puts "  ✓ SSH public key added"
-}}
+# Add SSH key for ubuntu user
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+echo '{ssh_pubkey}' >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
+echo "  ✓ Ubuntu SSH key added"
 
-# Also configure root access for BCM installation
-send "echo '$default_pass' | sudo -S bash -c \\"echo 'root:$new_pass' | chpasswd\\"\\r"
-expect "\\$"
-send "echo '$default_pass' | sudo -S sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config\\r"
-expect "\\$"
-puts "  ✓ Root SSH access enabled"
+# Add SSH key for root user
+sudo mkdir -p /root/.ssh
+sudo chmod 700 /root/.ssh
+echo '{ssh_pubkey}' | sudo tee -a /root/.ssh/authorized_keys > /dev/null
+sudo chmod 600 /root/.ssh/authorized_keys
+echo "  ✓ Root SSH key added"
 
-# Add SSH key for root too
-if {{ $pubkey ne "" }} {{
-    send "echo '$default_pass' | sudo -S mkdir -p /root/.ssh\\r"
-    expect "\\$"
-    send "echo '$default_pass' | sudo -S bash -c \\"echo '$pubkey' >> /root/.ssh/authorized_keys\\"\\r"
-    expect "\\$"
-    send "echo '$default_pass' | sudo -S chmod 600 /root/.ssh/authorized_keys\\r"
-    expect "\\$"
-    puts "  ✓ Root SSH key added"
-}}
-
-# Restart SSH service and wait for it to be ready
-send "echo '$default_pass' | sudo -S systemctl restart ssh\\r"
-expect "\\$"
-puts "  ⏳ Waiting for SSH service to restart..."
-send "sleep 5\\r"
-expect "\\$"
-
-send "exit\\r"
-expect eof
-
-puts "\\n✓ BCM head node configured successfully"
+# Restart SSH and wait
+sudo systemctl restart ssh
+sleep 3
+echo "  ✓ SSH service restarted"
+echo "SETUP_COMPLETE"
 '''
         
+        # Write setup script to temp file
+        setup_script_file = Path('/tmp/air_node_setup.sh')
+        setup_script_file.write_text(setup_script_content)
+        setup_script_file.chmod(0o755)
+        
+        host = ssh_info['hostname']
+        port = ssh_info['port']
+        default_pass = "nvidia"
+        
         try:
-            # Check if expect is available
-            subprocess.run(['which', 'expect'], capture_output=True, check=True)
+            # Check if sshpass is available (preferred method)
+            sshpass_available = subprocess.run(['which', 'sshpass'], capture_output=True).returncode == 0
             
-            # Write and run expect script
-            expect_file = Path('/tmp/air_password_config.exp')
-            expect_file.write_text(expect_script)
-            expect_file.chmod(0o700)
-            
-            print("\n  Running configuration script...")
-            result = subprocess.run(
-                ['expect', str(expect_file)],
-                capture_output=True,
-                text=True,
-                timeout=120
-            )
-            
-            # Show output
-            if result.stdout:
-                for line in result.stdout.strip().split('\n'):
-                    if line.strip():
-                        print(f"  {line}")
-            
-            if result.returncode == 0:
-                print("\n  ✓ Node configuration complete")
-                return True
+            if sshpass_available:
+                print("\n  Using sshpass for password authentication...")
+                
+                # Common SSH options
+                ssh_opts = [
+                    '-o', 'StrictHostKeyChecking=no',
+                    '-o', 'UserKnownHostsFile=/dev/null',
+                    '-p', str(port)
+                ]
+                
+                # Upload the setup script using scp
+                print("  Uploading setup script...")
+                scp_cmd = ['sshpass', '-p', default_pass, 'scp'] + ssh_opts + [
+                    str(setup_script_file),
+                    f'ubuntu@{host}:/tmp/setup_node.sh'
+                ]
+                result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode != 0:
+                    print(f"  ⚠ SCP failed: {result.stderr}")
+                    raise Exception("SCP upload failed")
+                
+                # Execute the setup script
+                print("  Executing setup script...")
+                ssh_cmd = ['sshpass', '-p', default_pass, 'ssh'] + ssh_opts + [
+                    f'ubuntu@{host}',
+                    'bash /tmp/setup_node.sh'
+                ]
+                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+                
+                # Show output
+                if result.stdout:
+                    for line in result.stdout.strip().split('\n'):
+                        if line.strip():
+                            print(f"  {line}")
+                
+                if 'SETUP_COMPLETE' in result.stdout:
+                    print("\n  ✓ Node configuration complete")
+                    return True
+                else:
+                    print(f"\n  ⚠ Setup may not have completed fully")
+                    if result.stderr:
+                        print(f"    stderr: {result.stderr[:200]}")
+                    return False
             else:
-                print(f"\n  ⚠ Configuration had issues")
-                if result.stderr:
-                    print(f"    {result.stderr}")
-                return False
-            
-        except FileNotFoundError:
-            print("  ⚠ 'expect' not found. Install with: sudo apt install expect")
-            print("  ⚠ Node not configured. Manual steps required:")
-            print(f"    1. SSH: ssh -p {ssh_info['port']} ubuntu@{ssh_info['hostname']}")
-            print(f"    2. Default password: nvidia")
-            print(f"    3. Change password: passwd")
-            print(f"    4. Add SSH key: echo 'your-key' >> ~/.ssh/authorized_keys")
-            return False
-        except subprocess.CalledProcessError:
-            print("  ⚠ 'expect' not found. Install with: sudo apt install expect")
+                # Fallback to expect
+                print("\n  sshpass not found, using expect fallback...")
+                print("  (Install sshpass for better reliability: sudo apt install sshpass)")
+                
+                # Create expect script
+                expect_script = f'''#!/usr/bin/expect -f
+set timeout 120
+spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P {port} /tmp/air_node_setup.sh ubuntu@{host}:/tmp/setup_node.sh
+expect "password:" {{ send "nvidia\\r" }}
+expect eof
+
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {port} ubuntu@{host} "bash /tmp/setup_node.sh"
+expect "password:" {{ send "nvidia\\r" }}
+expect "SETUP_COMPLETE"
+expect eof
+puts "\\n✓ BCM head node configured successfully"
+'''
+                expect_file = Path('/tmp/air_password_config.exp')
+                expect_file.write_text(expect_script)
+                expect_file.chmod(0o700)
+                
+                result = subprocess.run(
+                    ['expect', str(expect_file)],
+                    capture_output=True,
+                    text=True,
+                    timeout=180
+                )
+                
+                if result.stdout:
+                    for line in result.stdout.strip().split('\n'):
+                        if line.strip() and not line.startswith('spawn'):
+                            print(f"  {line}")
+                
+                if result.returncode == 0 or 'SETUP_COMPLETE' in result.stdout:
+                    print("\n  ✓ Node configuration complete")
+                    return True
+                else:
+                    print(f"\n  ⚠ Configuration may have issues")
+                    return False
+                    
+        except FileNotFoundError as e:
+            print(f"  ⚠ Required tool not found: {e}")
+            print("  ⚠ Install sshpass or expect: sudo apt install sshpass expect")
+            print("  ⚠ Manual configuration required:")
+            print(f"    1. SSH: ssh -p {port} ubuntu@{host}")
+            print(f"    2. Password: nvidia")
+            print(f"    3. Run: bash -c 'echo \"ubuntu:{self.default_password}\" | sudo chpasswd'")
+            print(f"    4. Add your SSH key to ~/.ssh/authorized_keys")
             return False
         except subprocess.TimeoutExpired:
             print("  ⚠ Configuration timed out")
@@ -1534,9 +1540,9 @@ puts "\\n✓ BCM head node configured successfully"
             print(f"  ⚠ Error configuring node: {e}")
             return False
         finally:
-            # Clean up
-            expect_file = Path('/tmp/air_password_config.exp')
-            expect_file.unlink(missing_ok=True)
+            # Clean up temp files
+            setup_script_file.unlink(missing_ok=True)
+            Path('/tmp/air_password_config.exp').unlink(missing_ok=True)
     
     def create_ssh_config(self, ssh_info, simulation_name):
         """
