@@ -1443,16 +1443,17 @@ echo "SETUP_COMPLETE"
             if sshpass_available:
                 print("\n  Using sshpass for password authentication...")
                 
-                # Common SSH options
-                ssh_opts = [
+                # Common options (StrictHostKeyChecking, etc.)
+                common_opts = [
                     '-o', 'StrictHostKeyChecking=no',
                     '-o', 'UserKnownHostsFile=/dev/null',
-                    '-p', str(port)
                 ]
                 
                 # Upload the setup script using scp
+                # Note: scp uses -P (uppercase) for port, ssh uses -p (lowercase)
                 print("  Uploading setup script...")
-                scp_cmd = ['sshpass', '-p', default_pass, 'scp'] + ssh_opts + [
+                scp_cmd = ['sshpass', '-p', default_pass, 'scp'] + common_opts + [
+                    '-P', str(port),  # scp uses uppercase -P for port
                     str(setup_script_file),
                     f'ubuntu@{host}:/tmp/setup_node.sh'
                 ]
@@ -1463,7 +1464,8 @@ echo "SETUP_COMPLETE"
                 
                 # Execute the setup script
                 print("  Executing setup script...")
-                ssh_cmd = ['sshpass', '-p', default_pass, 'ssh'] + ssh_opts + [
+                ssh_cmd = ['sshpass', '-p', default_pass, 'ssh'] + common_opts + [
+                    '-p', str(port),  # ssh uses lowercase -p for port
                     f'ubuntu@{host}',
                     'bash /tmp/setup_node.sh'
                 ]
