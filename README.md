@@ -43,8 +43,6 @@ This solution automates the complete BCM deployment process:
 | BCM 10.30.0 | `bcm-10.30.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.25.03 | `bcm-10.25.03-ubuntu2404.iso` | ✓ Tested |
 
-> **Note:** All BCM 10.x versions require a workaround for an Ubuntu 24.04 package conflict (`libglapi-amber` vs `libglapi-mesa`). This is handled automatically by the install script.
-
 **External Dependencies:**
 - [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer100/) - Ansible Galaxy collection for BCM 10.x
 - [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer110/) - Ansible Galaxy collection for BCM 11.x
