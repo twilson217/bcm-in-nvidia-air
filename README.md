@@ -299,7 +299,6 @@ The default topology (`topologies/default.json`) creates the following environme
   - Clones bcm-ansible-installer from GitHub
   - Generates cluster credentials and settings
   - Runs official BCM Ansible playbook locally
-- `scripts/cumulus-ztp.sh` - Zero-touch provisioning script for Cumulus switches
 
 **Topologies:**
 - `topologies/default.json` - Default BCM lab topology (JSON format)

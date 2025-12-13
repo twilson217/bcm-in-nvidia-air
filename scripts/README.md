@@ -65,22 +65,6 @@ python scripts/topology_validation.py topologies/*.json  # Validate multiple
 
 ---
 
-### `cumulus-ztp.sh`
-**Purpose**: Zero Touch Provisioning script for Cumulus Linux switches.
-
-**Usage**: Uploaded to BCM and served via HTTP for switch auto-configuration.
-
-**What it does**:
-- Sets up SSH key authentication
-- Changes default `cumulus` user password
-- Configures passwordless sudo
-- Enables Debian package sources
-- Sets pre-login banner
-
-**Note**: This script is a template. Future automation will customize it for specific deployments.
-
----
-
 ## Debug/Test Scripts
 
 These scripts are useful for troubleshooting authentication and API issues.
