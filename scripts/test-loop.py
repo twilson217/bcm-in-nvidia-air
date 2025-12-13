@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 import subprocess
@@ -118,7 +119,7 @@ def _air_delete_simulation(api_url: str, jwt_token: str, simulation_id: str) -> 
     return False, f"delete failed (status={resp.status_code}): {resp.text[:300]}"
 
 
-def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> int:
+def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tuple[int, Optional[str], Optional[str]]:
     cmd = [
         sys.executable,
         str(REPO_ROOT / "deploy_bcm_air.py"),
@@ -139,10 +140,13 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> int
     if dry_run:
         print(header)
         print(f"CMD: {' '.join(cmd)}")
-        return 0
+        return 0, None, None
 
     proc_env = os.environ.copy()
     proc_env.update(extra_env)
+
+    sim_id: Optional[str] = None
+    sim_name: Optional[str] = None
 
     # Stream output to console + deploy log in real time.
     with DEPLOY_LOG.open("a", encoding="utf-8") as log_f:
@@ -159,6 +163,21 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> int
         for line in p.stdout:
             sys.stdout.write(line)
             log_f.write(line)
+
+            # Capture sim name/id from deploy_bcm_air.py output so cleanup works even if
+            # deploy_bcm_air.py clears progress.json in non-interactive mode.
+            if sim_name is None:
+                m = re.search(r"^Creating simulation from JSON file:\\s*(.+)\\s*$", line)
+                if m:
+                    sim_name = m.group(1).strip()
+            if sim_id is None:
+                m = re.search(r"^Simulation ID:\\s*([0-9a-fA-F-]{36})\\s*$", line.strip())
+                if m:
+                    sim_id = m.group(1)
+                else:
+                    m2 = re.search(r"^ID:\\s*([0-9a-fA-F-]{36})\\s*$", line.strip())
+                    if m2:
+                        sim_id = m2.group(1)
         rc = p.wait()
 
     # Add END marker for easier log parsing
@@ -166,7 +185,7 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> int
     _append_line(DEPLOY_LOG, "")
     _append_line(DEPLOY_LOG, end_marker)
     _append_line(DEPLOY_LOG, "-" * len(end_marker))
-    return rc
+    return rc, sim_id, sim_name
 
 
 def _select_tests(all_tests: List[TestCase], args: argparse.Namespace) -> List[TestCase]:
@@ -271,9 +290,14 @@ def main() -> int:
         iso_names = [f.name.lower() for f in iso_dir.glob("*.iso")]
         print(f"\nPreflight: found {len(iso_names)} ISO(s) in .iso/")
         for t in tests:
-            # Check if any ISO contains the major version
             major = t.bcm_version.split(".")[0]
-            matching = [n for n in iso_names if f"bcm-{major}" in n or f"bcm{major}" in n]
+            # Prefer matching the requested version string if it includes a dot (e.g., 10.30.0)
+            needle = t.bcm_version.lower()
+            matching: List[str]
+            if "." in needle:
+                matching = [n for n in iso_names if needle.replace(".", "") in n.replace(".", "") or needle in n]
+            else:
+                matching = [n for n in iso_names if f"bcm-{major}" in n or f"bcm{major}" in n]
             if not matching:
                 print(f"  ⚠ WARNING: {t.key} requests BCM {t.bcm_version} but no BCM {major} ISO found!")
             else:
@@ -293,11 +317,15 @@ def main() -> int:
             PROGRESS_JSON.unlink()
 
         # Run the deployment
-        rc = _run_deploy(test, extra_env=extra_env, dry_run=args.dry_run)
+        rc, parsed_sim_id, parsed_sim_name = _run_deploy(test, extra_env=extra_env, dry_run=args.dry_run)
 
         ok = (rc == 0)
         status = "SUCCESS" if ok else f"FAIL(rc={rc})"
-        sim_id, sim_name = _read_progress_sim_id(PROGRESS_JSON)
+        sim_id, sim_name = parsed_sim_id, parsed_sim_name
+        if not sim_id or not sim_name:
+            file_sim_id, file_sim_name = _read_progress_sim_id(PROGRESS_JSON)
+            sim_id = sim_id or file_sim_id
+            sim_name = sim_name or file_sim_name
         _append_line(
             SUMMARY_LOG,
             f"[{_now()}] {test.key} {status} | api={test.api_url} | bcm={test.bcm_version} | sim_name={sim_name or 'n/a'} | sim_id={sim_id or 'n/a'}",

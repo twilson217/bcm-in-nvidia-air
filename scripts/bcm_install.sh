@@ -331,8 +331,12 @@ for p in files:
 PY
 }
 
-echo "  Applying Ansible collection patch (prevent libglapi-mesa install)..."
-patch_collection_remove_pkg "libglapi-mesa"
+if [ "$BCM_VERSION" == "10" ]; then
+    echo "  Applying Ansible collection patch (prevent libglapi-mesa install)..."
+    patch_collection_remove_pkg "libglapi-mesa"
+else
+    echo "  Skipping libglapi-mesa collection patch for BCM ${BCM_VERSION} (installer110)"
+fi
 
 # Workaround for observed crashes during certificate generation (rc=-11 / SIGSEGV)
 # If CMDaemon successfully writes cert.pem/cert.key but exits with rc=-11, Ansible fails.

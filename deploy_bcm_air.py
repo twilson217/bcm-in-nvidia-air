@@ -1757,11 +1757,13 @@ Host bcm
         ssh_cmd = f"ssh -F {ssh_config_file} -o StrictHostKeyChecking=no"
         remote_path = f"air-{self.bcm_node_name}:/home/ubuntu/bcm.iso"
         
+        # Reduce rsync verbosity: single progress line instead of per-file progress spam
         cmd = [
             'rsync',
-            '-avz',
-            '--partial',      # Keep partial files on interrupt (enables resume)
-            '--progress',
+            '-az',
+            '--partial',             # Keep partial files on interrupt (enables resume)
+            '--info=progress2',      # Single progress line
+            '--no-inc-recursive',    # More stable progress output for large files
             '-e', ssh_cmd,
             str(iso_path),
             remote_path
