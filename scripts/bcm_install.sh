@@ -287,14 +287,31 @@ def patch_file(path: str):
     changed = False
     while i < len(lines):
         line = lines[i]
+
+        # Cleanup: previous buggy patch inserted '- ignore_errors: true' as a new list item,
+        # which breaks the playbook ("no module/action detected in task"). Remove it.
+        if line.lstrip().startswith("- ignore_errors:"):
+            changed = True
+            i += 1
+            continue
+
         out.append(line)
 
         if f"name: {task_name}" in line:
-            indent = line.split("name:")[0]
+            # YAML task format is:
+            # - name: ...
+            #   <module>: ...
+            #   ignore_errors: true
+            #
+            # We must NOT add a new list item ('- ignore_errors'), but a task attribute
+            # aligned with other keys under the task.
+            leading_ws = line[: len(line) - len(line.lstrip())]
+            key_indent = leading_ws + "  "
+
             # If the next few lines already mention ignore_errors, don't duplicate.
-            window = "".join(lines[i+1:i+6])
+            window = "".join(lines[i + 1 : i + 12])
             if "ignore_errors:" not in window:
-                out.append(f"{indent}ignore_errors: true\n")
+                out.append(f"{key_indent}ignore_errors: true\n")
                 changed = True
         i += 1
 
