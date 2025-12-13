@@ -42,6 +42,21 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Format elapsed seconds as a human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        mins = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{mins}m {secs}s"
+    else:
+        hours = int(seconds // 3600)
+        mins = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        return f"{hours}h {mins}m {secs}s"
+
+
 def _ensure_log_dir() -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -305,9 +320,11 @@ def main() -> int:
     else:
         print(f"\n⚠ WARNING: .iso/ directory not found - all tests will fail!")
 
+    loop_start_time = time.time()
     _append_line(SUMMARY_LOG, f"[{_now()}] Test loop starting: {', '.join(t.key for t in tests)} (dry_run={args.dry_run})")
 
     overall_failures = 0
+    test_timings: List[Tuple[str, float]] = []  # (test_key, elapsed_seconds)
 
     for test in tests:
         extra_env = _parse_dotenv(test.env_file)
@@ -316,8 +333,11 @@ def main() -> int:
         if PROGRESS_JSON.exists() and not args.dry_run:
             PROGRESS_JSON.unlink()
 
-        # Run the deployment
+        # Run the deployment with timing
+        test_start_time = time.time()
         rc, parsed_sim_id, parsed_sim_name = _run_deploy(test, extra_env=extra_env, dry_run=args.dry_run)
+        test_elapsed = time.time() - test_start_time
+        test_timings.append((test.key, test_elapsed))
 
         ok = (rc == 0)
         status = "SUCCESS" if ok else f"FAIL(rc={rc})"
@@ -328,7 +348,7 @@ def main() -> int:
             sim_name = sim_name or file_sim_name
         _append_line(
             SUMMARY_LOG,
-            f"[{_now()}] {test.key} {status} | api={test.api_url} | bcm={test.bcm_version} | sim_name={sim_name or 'n/a'} | sim_id={sim_id or 'n/a'}",
+            f"[{_now()}] {test.key} {status} | elapsed={_format_elapsed(test_elapsed)} | bcm={test.bcm_version} | sim_name={sim_name or 'n/a'}",
         )
 
         if not args.dry_run:
@@ -359,7 +379,14 @@ def main() -> int:
         if test != tests[-1] and not args.dry_run:
             time.sleep(10)
 
-    _append_line(SUMMARY_LOG, f"[{_now()}] Test loop finished. failures={overall_failures}/{len(tests)}")
+    # Final summary with timing
+    loop_elapsed = time.time() - loop_start_time
+    _append_line(SUMMARY_LOG, f"[{_now()}] Test loop finished. failures={overall_failures}/{len(tests)} | total_elapsed={_format_elapsed(loop_elapsed)}")
+    
+    # Timing breakdown
+    _append_line(SUMMARY_LOG, f"[{_now()}] Timing breakdown:")
+    for test_key, elapsed in test_timings:
+        _append_line(SUMMARY_LOG, f"           {test_key}: {_format_elapsed(elapsed)}")
     return 0 if overall_failures == 0 else 1
 
 
