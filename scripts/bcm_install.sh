@@ -378,6 +378,12 @@ management_network_netmask: 24
 install_medium: dvd
 install_medium_dvd_path: "${BCM_ISO_PATH}"
 timezone: UTC
+# Workaround: prevent software-image creation from installing both libglapi-amber and libglapi-mesa.
+# On Ubuntu 24.04, libglapi-amber conflicts with libglapi-mesa. The installer’s cm-create-image
+# distro package list includes both mesa and amber-dri; excluding amber-dri avoids the conflict.
+exclude_software_images_distro_packages:
+  - libgl1-amber-dri
+  - libglapi-amber
 license:
   country: US
   state: California
