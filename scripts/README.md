@@ -2,7 +2,7 @@
 
 This directory contains utility scripts for the BCM NVIDIA Air deployment automation.
 
-## Main Scripts
+## Core Scripts
 
 ### `check_setup.py`
 **Purpose**: Verify all prerequisites before running a deployment.
@@ -21,7 +21,7 @@ python scripts/check_setup.py
   - `BCM_PRODUCT_KEY`
 - BCM ISO file present in `.iso/` directory
 
-**Auto-setup**: If `.env` or `.iso/` directory is missing, the script creates them automatically (copies `sample-configs/env.example` to `.env`).
+**Auto-setup**: If `.env` or `.iso/` directory is missing, the script creates them automatically.
 
 ---
 
@@ -54,72 +54,115 @@ python scripts/topology_validation.py topologies/*.json  # Validate multiple
 **What it does**:
 1. Disables unattended upgrades
 2. Installs system dependencies (Python, MySQL, etc.)
-3. Secures MySQL installation
-4. Uses bcm-ansible-installer (uploaded from submodule during deployment)
-5. Installs Bright Computing Ansible Galaxy collection
-6. Generates configuration files (`cluster-settings.yml`, `cluster-credentials.yml`)
-7. Runs the BCM Ansible playbook
-8. Performs post-install configuration (TFTP, passwords)
+3. Applies Ubuntu 24.04 workaround for BCM 10.x (libglapi-amber/mesa conflict)
+4. Secures MySQL installation
+5. Clones bcm-ansible-installer from GitHub
+6. Installs Bright Computing Ansible Galaxy collection
+7. Patches collection for compatibility issues
+8. Generates configuration files (`cluster-settings.yml`, `cluster-credentials.yml`)
+9. Runs the BCM Ansible playbook
+10. Performs post-install configuration (TFTP, passwords)
 
 **Note**: Do not run this script directly. It's designed to be executed by `deploy_bcm_air.py`.
 
 ---
 
-## Debug/Test Scripts
-
-These scripts are useful for troubleshooting authentication and API issues.
-
-### `test_auth.sh`
-**Purpose**: Quick bash script to test NVIDIA Air API authentication via curl.
+### `test-loop.py`
+**Purpose**: Run an overnight test matrix across multiple BCM versions and Air sites.
 
 **Usage**:
 ```bash
-# Test external Air
-./scripts/test_auth.sh
+# Run all 6 tests
+python scripts/test-loop.py
 
-# Test internal Air (requires VPN)
-./scripts/test_auth.sh --internal
+# Run specific tests
+python scripts/test-loop.py --test2 --test3 --test4
+
+# Dry run (show what would run)
+python scripts/test-loop.py --dry-run
+
+# Stop on first failure
+python scripts/test-loop.py --stop-on-fail
+```
+
+**Test matrix**:
+| Test | BCM Version | Air Site |
+|------|-------------|----------|
+| test1 | 10.25.03 | air.nvidia.com |
+| test2 | 10.30.0 | air.nvidia.com |
+| test3 | 11.x | air.nvidia.com |
+| test4 | 10.25.03 | air-inside.nvidia.com |
+| test5 | 10.30.0 | air-inside.nvidia.com |
+| test6 | 11.x | air-inside.nvidia.com |
+
+**Features**:
+- Tracks elapsed time per test and total loop time
+- Streams output to console and `.logs/deploy_bcm_air.log`
+- Writes summary to `.logs/test-summary.log`
+- Automatically deletes simulations after each test (cleanup)
+- Parses simulation ID from output for reliable cleanup
+
+---
+
+## Utility Scripts
+
+### `delete-sim.py`
+**Purpose**: Delete an NVIDIA Air simulation by ID or name.
+
+**Usage**:
+```bash
+# Delete by ID
+python scripts/delete-sim.py --sim-id 16514465-7187-432a-9beb-b3f88556a01a
+
+# Delete by name
+python scripts/delete-sim.py --sim-name "202512001-BCM-Lab"
+
+# Use specific env file
+python scripts/delete-sim.py --sim-id <uuid> --env .env.external
+
+# Use internal Air
+python scripts/delete-sim.py --sim-id <uuid> --internal
+
+# Dry run
+python scripts/delete-sim.py --sim-id <uuid> --dry-run
 ```
 
 ---
 
-### `test_sdk_auth.py`
-**Purpose**: Test authentication using the Air SDK Python library.
+### `setup_userconfig.py`
+**Purpose**: One-time setup to create the cloud-init UserConfig.
 
 **Usage**:
 ```bash
-python scripts/test_sdk_auth.py
+python scripts/setup_userconfig.py
 ```
 
-**What it tests**:
-- Air SDK package is installed
-- API token authentication works
-- Can list simulations
+UserConfigs are user-level resources (not simulation-specific), so they can be created once and reused. This script is useful if:
+- The UserConfig API is rate-limited during full deployment
+- You want to pre-configure before running deployments
 
 ---
 
-### `test_direct_auth.py`
-**Purpose**: Test direct API authentication using the `requests` library (without Air SDK).
+### `cleanup_userconfigs.py`
+**Purpose**: List and delete duplicate or test UserConfigs.
 
 **Usage**:
 ```bash
-python scripts/test_direct_auth.py
+# List all configs
+python scripts/cleanup_userconfigs.py
+
+# Delete duplicates (keeps 'bcm-cloudinit-password')
+python scripts/cleanup_userconfigs.py --delete
 ```
 
-Useful for debugging when the SDK has issues.
+Useful for cleaning up after multiple test runs.
 
 ---
 
-### `check_sim_state.py`
-**Purpose**: Debug script to check the state of a specific simulation.
+## Troubleshooting Scripts
 
-**Usage**:
-```bash
-python scripts/check_sim_state.py <simulation_id>
-```
+For scripts used to debug NVIDIA Air API issues (authentication, UserConfig creation, WAF patterns), see:
 
-**What it shows**:
-- Simulation status
-- Node states
-- Service information
+**[`air-tests/README.md`](air-tests/README.md)**
 
+These scripts are not part of the normal deployment workflow but are preserved for future troubleshooting.
