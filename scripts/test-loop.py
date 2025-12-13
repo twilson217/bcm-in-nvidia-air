@@ -167,15 +167,15 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tup
             # Capture sim name/id from deploy_bcm_air.py output so cleanup works even if
             # deploy_bcm_air.py clears progress.json in non-interactive mode.
             if sim_name is None:
-                m = re.search(r"^Creating simulation from JSON file:\\s*(.+)\\s*$", line)
+                m = re.search(r"^Creating simulation from JSON file:\s*(.+)\s*$", line)
                 if m:
                     sim_name = m.group(1).strip()
             if sim_id is None:
-                m = re.search(r"^Simulation ID:\\s*([0-9a-fA-F-]{36})\\s*$", line.strip())
+                m = re.search(r"^Simulation ID:\s*([0-9a-fA-F-]{36})\s*$", line.strip())
                 if m:
                     sim_id = m.group(1)
                 else:
-                    m2 = re.search(r"^ID:\\s*([0-9a-fA-F-]{36})\\s*$", line.strip())
+                    m2 = re.search(r"^\s*ID:\s*([0-9a-fA-F-]{36})\s*$", line)
                     if m2:
                         sim_id = m2.group(1)
         rc = p.wait()
