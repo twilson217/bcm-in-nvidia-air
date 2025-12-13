@@ -50,15 +50,11 @@ This solution automates the complete BCM deployment process:
 **External Repository (cloned during install):**
 - [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) - Ansible scaffolding for BCM installation
 
-**Note on Free Tier:** The external air.nvidia.com site may have limitations on free accounts (e.g., cloud-init/UserConfig may not be available). The script includes fallback mechanisms for password and SSH key configuration.
-
 ## Quick Start
 
 ### Prerequisites
 
-1. **NVIDIA Air account** with API access
-   - External site: [air.nvidia.com](https://air.nvidia.com) - publicly accessible
-   - Internal site (NVIDIA employees): [air-inside.nvidia.com](https://air-inside.nvidia.com) - **requires NVIDIA VPN or internal network**
+1. **NVIDIA Air account** with API access at [air.nvidia.com](https://air.nvidia.com)
 2. **Python 3.10+** installed locally
 3. **NVIDIA Air API token** (generate from your Air account settings)
 4. **BCM ISO file** (~5GB) - Download from [Bright Computing Customer Portal](https://customer.brightcomputing.com/download-iso)
@@ -94,13 +90,7 @@ export UV_LINK_MODE=copy
 uv pip install -e .
 ```
 
-5. Install expect (required for password configuration fallback on free tier):
-```bash
-sudo apt install -y expect
-```
-This is especially important for air.nvidia.com free accounts where cloud-init may not be available.
-
-6. Configure your NVIDIA Air credentials:
+5. Configure your NVIDIA Air credentials:
 ```bash
 # Copy the example environment file
 cp sample-configs/env.example .env
@@ -109,7 +99,7 @@ cp sample-configs/env.example .env
 # Required fields:
 #   AIR_API_TOKEN - Your API token from Air
 #   AIR_USERNAME - Your Air account email
-#   AIR_API_URL - Air site URL (air.nvidia.com or air-inside.nvidia.com)
+#   AIR_API_URL - https://air.nvidia.com
 #   BCM_PRODUCT_KEY - Your BCM license key
 #   BCM_ADMIN_EMAIL - Admin email for BCM
 ```
@@ -118,14 +108,14 @@ cp sample-configs/env.example .env
 ```bash
 AIR_API_TOKEN=your_actual_token_here
 AIR_USERNAME=your_email@nvidia.com
-AIR_API_URL=https://air.nvidia.com  # or https://air-inside.nvidia.com
+AIR_API_URL=https://air.nvidia.com
 BCM_PRODUCT_KEY=123456-789012-345678-901234-567890
 BCM_ADMIN_EMAIL=your_email@nvidia.com
 ```
 
 > **⚠️ License MAC Address:** BCM licenses are bound to the MAC address of the head node's outbound interface. The default topology (`topologies/default.json`) sets a static MAC address to ensure your license works consistently across simulation rebuilds. If you need to use a different MAC (to match an existing license), update the `mac` field on the BCM node's outbound interface in your topology file.
 
-8. Place your BCM ISO file:
+6. Place your BCM ISO file:
 ```bash
 # Create the .iso directory
 mkdir -p .iso
@@ -160,21 +150,10 @@ This will check that all prerequisites are met before deployment.
 
 ### Deploy BCM
 
-**Quick Configuration Reference:**
-
-| Site | Configuration | Command |
-|------|---------------|---------|
-| External (default) | Set `AIR_API_URL=https://air.nvidia.com` in `.env` | `python deploy_bcm_air.py` |
-| Internal (NVIDIA) | Set `AIR_API_URL=https://air-inside.nvidia.com` in `.env` | `python deploy_bcm_air.py` or use `--internal` flag |
-
 Run the automated deployment script:
 
 ```bash
-# Deploy to external site (default)
 python deploy_bcm_air.py
-
-# Or deploy to internal site using --internal flag
-python deploy_bcm_air.py --internal
 ```
 
 The script will:
@@ -245,9 +224,7 @@ cp sample-configs/cloud-init-password.yaml.example cloud-init-password.yaml
 - ✅ Sets password for `root` and `ubuntu` users
 - ✅ Adds your SSH key to `ubuntu` user
 - ✅ Adds your SSH key to `root` user
-- ✅ Enables password auth as fallback
-
-**Fallback:** If cloud-init fails, the script automatically falls back to SSH-based configuration using `expect`.
+- ✅ Enables password authentication
 
 **Files:**
 - `sample-configs/cloud-init-password.yaml.example` - Template (in version control)
@@ -323,7 +300,7 @@ Create custom topologies using the NVIDIA Air web UI and export them to JSON for
 
 ### Workflow
 
-1. **Create in NVIDIA Air Web UI**: Use the visual topology editor at air.nvidia.com (or air-inside.nvidia.com)
+1. **Create in NVIDIA Air Web UI**: Use the visual topology editor at air.nvidia.com
 2. **Export to JSON**: Use the export function to download the topology as JSON
 3. **Place in `topologies/` directory**: Save the JSON file in this directory
 4. **Deploy**: Run `python deploy_bcm_air.py --topology topologies/your-topology.json`
@@ -363,9 +340,6 @@ BCM licenses are bound to MAC addresses. Keep the MAC address on your BCM node's
 ```bash
 # Deploy with custom topology
 python deploy_bcm_air.py --topology topologies/my-topology.json
-
-# With internal Air site
-python deploy_bcm_air.py --internal --topology topologies/my-topology.json
 ```
 
 ### Validation
@@ -516,7 +490,6 @@ Response: {"detail":"Authentication credentials were not provided."}
 **Common causes:**
 1. `AIR_API_TOKEN` environment variable is not set
 2. API token is invalid or expired
-3. Using wrong token (internal vs external site tokens are different)
 
 **Solutions:**
 
@@ -528,30 +501,11 @@ cat .env
 python -c "from dotenv import load_dotenv; import os; load_dotenv(); print('Token:', os.getenv('AIR_API_TOKEN', 'NOT SET'))"
 
 # Update your .env file with correct credentials:
-# 1. Log in to air.nvidia.com or air-inside.nvidia.com
+# 1. Log in to air.nvidia.com
 # 2. Go to Account Settings → API Tokens
 # 3. Generate a new token
 # 4. Update AIR_API_TOKEN in your .env file
 ```
-
-**Important:** API tokens for `air.nvidia.com` and `air-inside.nvidia.com` are **different**. Make sure you're using the token from the correct site.
-
-### Connection to Internal Air Site Fails
-
-If you get a DNS resolution error when using `--internal` or `air-inside.nvidia.com`:
-
-```
-Failed to resolve 'air-inside.nvidia.com'
-```
-
-**This is expected** - the internal Air site requires:
-- Connection to NVIDIA internal network, OR
-- Active NVIDIA VPN connection
-
-**Solutions:**
-1. Connect to NVIDIA VPN and try again
-2. Use the external site instead: `python deploy_bcm_air.py` (remove `--internal` flag)
-3. Verify you can access https://air-inside.nvidia.com in your browser
 
 ### SSH Access Issues
 
@@ -569,17 +523,10 @@ ssh -F .ssh/<simulation-name> bcm
 
 **Default Passwords:**
 
-| Scenario | Username | Password |
-|----------|----------|----------|
-| Cloud-init worked (air-inside) | ubuntu/root | Your configured password (default: `Nvidia1234!`) |
-| Cloud-init unavailable (air.nvidia.com free tier) | ubuntu | `nvidia` |
-
-**Free Tier Limitations:**
-
-On air.nvidia.com free accounts, cloud-init may not be available. The script will:
-1. Attempt cloud-init configuration
-2. Fall back to SSH-based configuration using `expect`
-3. If both fail, you'll need to use the default password `nvidia`
+| Username | Password |
+|----------|----------|
+| ubuntu | Your configured password (default: `Nvidia1234!`) |
+| root | Your configured password (default: `Nvidia1234!`) |
 
 **SSH Key Permission Errors in WSL:**
 
@@ -662,9 +609,6 @@ python deploy_bcm_air.py --bcm-version 11
 python deploy_bcm_air.py --bcm-version 10.30.0
 python deploy_bcm_air.py --bcm-version 10.25.03
 
-# Deploy to internal NVIDIA Air site
-python deploy_bcm_air.py --internal
-
 # Use custom topology file
 python deploy_bcm_air.py --topology topologies/my-topology.json
 
@@ -681,12 +625,8 @@ All configuration is managed through a `.env` file in the project root. Copy `sa
 
 - `AIR_API_TOKEN` - Your NVIDIA Air API authentication token (required)
 - `AIR_USERNAME` - Your Air account email address (required)
-- `AIR_API_URL` - NVIDIA Air API base URL (required)
-  - External: `https://air.nvidia.com`
-  - Internal: `https://air-inside.nvidia.com`
+- `AIR_API_URL` - NVIDIA Air API base URL: `https://air.nvidia.com` (required)
 - `UV_LINK_MODE` - Set to `copy` to suppress hardlink warnings in WSL (optional)
-
-**Note:** Command-line flags (`--internal`, `--api-url`) will override `.env` settings.
 
 ## Repository Structure
 
