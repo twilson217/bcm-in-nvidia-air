@@ -41,9 +41,9 @@ This solution automates the complete BCM deployment process:
 |---------|--------------|--------|
 | BCM 11.0.0 | `bcm-11.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.30.0 | `bcm-10.30.0-ubuntu2404.iso` | ✓ Tested |
-| BCM 10.24.03 | `bcm-10.24.03-ubuntu2404.iso` | ✓ Tested (with workaround) |
+| BCM 10.25.03 | `bcm-10.25.03-ubuntu2404.iso` | ✓ Tested |
 
-> **Note:** BCM 10.24.x requires a workaround for an Ubuntu 24.04 package conflict (`libglapi-amber` vs `libglapi-mesa`). This is handled automatically by the install script.
+> **Note:** All BCM 10.x versions require a workaround for an Ubuntu 24.04 package conflict (`libglapi-amber` vs `libglapi-mesa`). This is handled automatically by the install script.
 
 **External Dependencies:**
 - [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer100/) - Ansible Galaxy collection for BCM 10.x
@@ -148,9 +148,9 @@ The script auto-detects ISO files based on filename patterns. Supported formats:
 | `bcm-MAJOR.MINOR.PATCH.iso` | `bcm-10.30.0.iso` | 10.30.0 |
 | `bcmMAJOR.MINOR.PATCH.iso` | `bcm10.30.0.iso` | 10.30.0 |
 
-**If you have multiple ISOs of the same major version** (e.g., both 10.24 and 10.30):
-- Rename them to include the full version: `bcm-10.24.03-ubuntu2404.iso`, `bcm-10.30.0-ubuntu2404.iso`
-- Use `--bcm-version 10.24.03` or `--bcm-version 10.30.0` to select the specific release
+**If you have multiple ISOs of the same major version** (e.g., both 10.25 and 10.30):
+- Rename them to include the full version: `bcm-10.25.03-ubuntu2404.iso`, `bcm-10.30.0-ubuntu2404.iso`
+- Use `--bcm-version 10.25.03` or `--bcm-version 10.30.0` to select the specific release
 - In non-interactive mode (`-y`), you must specify the exact version if multiple ISOs exist
 
 8. **(Optional)** Verify your setup:
@@ -307,8 +307,8 @@ The default topology (`topologies/default.json`) creates the following environme
 **ISO Directory:**
 - `.iso/` - Place your BCM ISO files here (gitignored)
   - `bcm-10.30.0-ubuntu2404.iso` - BCM 10.x ISO (example)
-  - `bcm-10.24.03-ubuntu2404.iso` - Another BCM 10.x release (example)
-  - `bcm-11.0-ubuntu2404.iso` - BCM 11.x ISO (example)
+  - `bcm-10.25.03-ubuntu2404.iso` - Another BCM 10.x release (example)
+  - `bcm-11.30.0-ubuntu2404.iso` - BCM 11.x ISO (example)
   - See "ISO Filename Patterns" above for supported naming conventions
 
 **Tools:**
@@ -662,7 +662,7 @@ python deploy_bcm_air.py --bcm-version 11
 
 # Specify exact BCM release (when multiple ISOs available)
 python deploy_bcm_air.py --bcm-version 10.30.0
-python deploy_bcm_air.py --bcm-version 10.24.03
+python deploy_bcm_air.py --bcm-version 10.25.03
 
 # Deploy to internal NVIDIA Air site
 python deploy_bcm_air.py --internal
@@ -792,11 +792,11 @@ User Machine                     SSH Proxy                    bcm-01 (head node)
 
 [Step 2] pip install PyMySQL, python-ldap
 
-[Step 3] Apply Ubuntu 24.04 package workaround (BCM 10.24.x only)
-    └── apt install libglapi-mesa
-    └── apt-mark hold libglapi-amber
-    └── Note: Only needed for backward compatibility with BCM 10.24.03
-              Not required for BCM 10.30.0 or 11.x
+[Step 3] Apply Ubuntu 24.04 package workaround (BCM 10.x)
+    └── Patch Ansible collection to remove libglapi-mesa references
+    └── Configure cm-create-image to exclude amber packages
+    └── Note: Required for all BCM 10.x on Ubuntu 24.04 (libglapi-amber
+              conflicts with libglapi-mesa). BCM 11.x does not need this.
 
 [Step 4] Secure MySQL installation
 
