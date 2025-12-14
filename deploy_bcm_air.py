@@ -1861,56 +1861,6 @@ Host bcm
             print(f"\n✗ Script upload failed: {e}")
             return False
     
-    def upload_ansible_installer(self, ssh_config_file):
-        """
-        Upload the bcm-ansible-installer submodule directory to the head node
-        
-        Args:
-            ssh_config_file: Path to SSH config file
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        print(f"\n📦 Uploading bcm-ansible-installer directory...")
-        
-        # Find the submodule directory (relative to this script)
-        installer_dir = Path(__file__).parent / 'bcm-ansible-installer'
-        if not installer_dir.exists():
-            print(f"\n✗ bcm-ansible-installer submodule not found at {installer_dir}")
-            print(f"  Please ensure the submodule is initialized:")
-            print(f"    git submodule update --init")
-            return False
-        
-        # Use rsync to upload the directory
-        ssh_cmd = f"ssh -F {ssh_config_file} -o StrictHostKeyChecking=no"
-        remote_path = f"air-{self.bcm_node_name}:/home/ubuntu/"
-        
-        cmd = [
-            'rsync',
-            '-avz',
-            '--delete',           # Ensure clean copy
-            '-e', ssh_cmd,
-            str(installer_dir) + '/',  # Trailing slash to copy contents
-            f"air-{self.bcm_node_name}:/home/ubuntu/bcm-ansible-installer/"
-        ]
-        
-        try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=False,
-                text=True
-            )
-            print(f"  ✓ bcm-ansible-installer uploaded")
-            return True
-        except subprocess.CalledProcessError as e:
-            print(f"\n✗ Ansible installer upload failed: {e}")
-            return False
-        except FileNotFoundError:
-            print(f"\n✗ rsync not found. Please install rsync:")
-            print(f"    sudo apt-get install rsync")
-            return False
-    
     def execute_bcm_install(self, ssh_config_file):
         """
         Execute BCM installation script on the head node

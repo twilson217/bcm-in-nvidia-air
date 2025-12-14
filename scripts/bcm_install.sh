@@ -184,7 +184,8 @@ export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
 # we must install these explicitly.
 ansible-galaxy collection install "${BCM_COLLECTION}" --force
 ansible-galaxy collection install community.general --force
-echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general"
+ansible-galaxy collection install community.mysql --force
+echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general, community.mysql"
 
 #
 # BCM 10.x on Ubuntu 24.04:
