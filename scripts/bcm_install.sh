@@ -63,11 +63,11 @@ echo "  Upgrading system packages..."
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y -qq
 
 # Ensure we never keep both libglapi-amber and libglapi-mesa installed together.
-# On Ubuntu 24.04 these can conflict and leave apt in a broken state.
+# On Ubuntu 24.04 these packages conflict. We standardize on libglapi-mesa.
 echo "  Checking for libglapi-amber/libglapi-mesa conflicts..."
 if dpkg -s libglapi-amber >/dev/null 2>&1 && dpkg -s libglapi-mesa >/dev/null 2>&1; then
-    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-mesa..."
-    apt-get remove -y -qq libglapi-mesa >/dev/null 2>&1 || true
+    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-amber..."
+    apt-get remove -y -qq libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
 fi
 
 # Fix any broken dependencies
@@ -76,55 +76,6 @@ apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
 pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
-
-# Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x only)
-# libglapi-amber and libglapi-mesa are mutually exclusive
-# The BCM 10.24.x Ansible role tries to install packages requiring both
-# Solution: Create dummy libglapi-mesa FIRST, then install libglapi-amber
-if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
-    echo "  Applying Ubuntu 24.04 package conflict workaround for BCM ${BCM_FULL_VERSION}..."
-    
-    # Step 1: Install equivs to create dummy packages
-    apt-get install -y equivs >/dev/null 2>&1
-    
-    # Step 2: Create dummy libglapi-mesa package FIRST
-    # This satisfies any dependency on libglapi-mesa without the actual package
-    mkdir -p /tmp/dummy-pkg
-    cat > /tmp/dummy-pkg/libglapi-mesa << 'CTRLEOF'
-Section: libs
-Priority: optional
-Standards-Version: 3.9.2
-
-Package: libglapi-mesa
-Version: 99.0.0
-Provides: libglapi-mesa
-Replaces: libglapi-mesa
-Conflicts: libglapi-mesa
-Description: Dummy package to satisfy BCM 10.24.x dependency
- Prevents real libglapi-mesa from being installed (conflicts with libglapi-amber).
-CTRLEOF
-    
-    cd /tmp/dummy-pkg
-    equivs-build libglapi-mesa >/dev/null 2>&1
-    dpkg -i libglapi-mesa_99.0.0_all.deb >/dev/null 2>&1 || true
-    cd - >/dev/null
-    echo "  ✓ Dummy libglapi-mesa installed (satisfies dependency)"
-    
-    # Step 3: Now install libglapi-amber (won't conflict with our dummy)
-    apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
-    echo "  ✓ libglapi-amber installed"
-    
-    # Step 4: Pre-install problematic packages without version constraints
-    echo "  Pre-installing packages with version mismatches..."
-    apt-get install -y libxml2-dev libxslt1-dev libuser1 libicu-dev >/dev/null 2>&1 || true
-    
-    # Step 5: Fix any broken deps after our workaround
-    apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install -y -qq || true
-    
-    echo "  ✓ Package conflict workaround applied"
-else
-    echo "  ℹ BCM ${BCM_FULL_VERSION} - no package workaround needed"
-fi
 
 # Step 4: Secure MySQL installation
 echo "[Step 4/10] Securing MySQL..."
@@ -154,27 +105,57 @@ if [ ! -f "$BCM_ISO_PATH" ]; then
 fi
 echo "  ✓ ISO found at $BCM_ISO_PATH (Ansible will handle mounting)"
 
-# Step 6: Clone/setup BCM Ansible installer
+# Step 6: Create BCM Ansible installer (self-contained, no external repo needed)
 echo "[Step 6/10] Setting up BCM Ansible installer..."
-BCM_INSTALLER_REPO="https://github.com/twilson217/bcm-ansible-installer.git"
+BCM_INSTALLER_DIR="/home/ubuntu/bcm-ansible-installer"
+mkdir -p "${BCM_INSTALLER_DIR}/inventory"
+mkdir -p "${BCM_INSTALLER_DIR}/group_vars/head_node"
+cd "${BCM_INSTALLER_DIR}"
 
-if [ ! -d /home/ubuntu/bcm-ansible-installer ]; then
-    echo "  Cloning bcm-ansible-installer from GitHub..."
-    git clone "$BCM_INSTALLER_REPO" /home/ubuntu/bcm-ansible-installer
-    if [ $? -ne 0 ]; then
-        echo "  ✗ ERROR: Failed to clone bcm-ansible-installer"
-        exit 1
-    fi
-    echo "  ✓ Repository cloned"
-else
-    echo "  ✓ bcm-ansible-installer already exists"
-fi
-cd /home/ubuntu/bcm-ansible-installer
+# Create ansible.cfg
+cat > ansible.cfg <<'ANSIBLECFG'
+[defaults]
+host_key_checking = False
+inventory = inventory/hosts
+deprecation_warnings = False
+interpreter_python = auto_silent
 
-# Fix playbook to use correct BCM version role
-sed -i "s/brightcomputing\.installer110\.head_node/${BCM_ROLE}/g" playbook.yml
-sed -i "s/brightcomputing\.installer100\.head_node/${BCM_ROLE}/g" playbook.yml
-echo "  ✓ Playbook configured for ${BCM_ROLE}"
+[privilege_escalation]
+become = True
+become_method = sudo
+become_user = root
+ANSIBLECFG
+echo "  ✓ ansible.cfg created"
+
+# Create inventory/hosts
+cat > inventory/hosts <<'INVENTORY'
+[head_node]
+localhost ansible_connection=local
+INVENTORY
+echo "  ✓ inventory/hosts created"
+
+# Create requirements-control-node.txt
+cat > requirements-control-node.txt <<'REQUIREMENTS'
+ansible>=2.15
+PyMySQL
+python-ldap
+REQUIREMENTS
+echo "  ✓ requirements-control-node.txt created"
+
+# Create playbook.yml with the correct role for this BCM version
+cat > playbook.yml <<PLAYBOOK
+---
+- name: Install BCM Head Node
+  hosts: head_node
+  become: true
+  roles:
+    - ${BCM_ROLE}
+  tasks:
+    - name: Include post install user tasks
+      include_tasks: post_install_user_tasks.yml
+      when: post_install_user_tasks is defined or (lookup('file', 'post_install_user_tasks.yml', errors='ignore') | length > 0)
+PLAYBOOK
+echo "  ✓ playbook.yml created for ${BCM_ROLE}"
 
 # Create Python virtual environment
 python3 -m venv venv
@@ -190,11 +171,10 @@ ansible-galaxy collection install "${BCM_COLLECTION}" --force
 echo "  ✓ Collection installed: ${BCM_COLLECTION}"
 
 #
-# BCM 10.24.x on Ubuntu 24.04:
-# The installer100 collection may attempt to install libglapi-mesa alongside libglapi-amber.
-# Those packages conflict (mutually exclusive) on Ubuntu 24.04. To prevent this, we patch the
-# installed Ansible collection in-place to remove references to libglapi-mesa before running
-# the playbook.
+# BCM 10.x on Ubuntu 24.04:
+# The installer100 collection references both libglapi-amber and libglapi-mesa packages,
+# which conflict on Ubuntu 24.04. We standardize on libglapi-mesa (used by most BCM installations).
+# This function patches the installed Ansible collection to remove package references.
 #
 patch_collection_remove_pkg() {
     local pkg="$1"
@@ -331,11 +311,14 @@ for p in files:
 PY
 }
 
+# BCM 10.x on Ubuntu 24.04: The installer100 collection may reference libglapi-amber.
+# We standardize on libglapi-mesa, so we patch the collection to remove amber references.
 if [ "$BCM_VERSION" == "10" ]; then
-    echo "  Applying Ansible collection patch (prevent libglapi-mesa install)..."
-    patch_collection_remove_pkg "libglapi-mesa"
+    echo "  Applying Ansible collection patch (standardize on libglapi-mesa)..."
+    patch_collection_remove_pkg "libglapi-amber"
+    patch_collection_remove_pkg "libgl1-amber-dri"
 else
-    echo "  Skipping libglapi-mesa collection patch for BCM ${BCM_VERSION} (installer110)"
+    echo "  Skipping libglapi collection patch for BCM ${BCM_VERSION} (installer110)"
 fi
 
 # Workaround for observed crashes during certificate generation (rc=-11 / SIGSEGV)

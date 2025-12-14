@@ -18,6 +18,11 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+try:
+    import yaml
+except ImportError:
+    yaml = None  # Optional: features.yaml support requires PyYAML
+
 # Load environment variables from .env file
 load_dotenv()
 
@@ -38,6 +43,7 @@ class ProgressTracker:
         'node_ready',
         'ssh_configured',
         'bcm_installed',
+        'features_configured',
         'completed'
     ]
     
@@ -2019,6 +2025,188 @@ Host bcm
             print(f"  /home/ubuntu/ansible_bcm_install.log on {self.bcm_node_name}")
         
         print("\n" + "="*60 + "\n")
+    
+    def load_topology_features(self, topology_dir):
+        """
+        Load features.yaml from a topology directory
+        
+        Args:
+            topology_dir: Path to topology directory containing features.yaml
+            
+        Returns:
+            dict: Features configuration, or empty dict if not found
+        """
+        if yaml is None:
+            print("  ⚠ PyYAML not installed - features.yaml support disabled")
+            return {}
+        
+        features_path = Path(topology_dir) / 'features.yaml'
+        if not features_path.exists():
+            print(f"  ℹ No features.yaml found in {topology_dir}")
+            return {}
+        
+        try:
+            with open(features_path, 'r') as f:
+                features = yaml.safe_load(f) or {}
+            return features
+        except Exception as e:
+            print(f"  ⚠ Error loading features.yaml: {e}")
+            return {}
+    
+    def run_post_install_features(self, topology_dir, ssh_config_file):
+        """
+        Execute post-install features defined in features.yaml
+        
+        Args:
+            topology_dir: Path to topology directory
+            ssh_config_file: Path to SSH config file for remote execution
+            
+        Returns:
+            bool: True if all enabled features succeeded
+        """
+        print("\n" + "="*60)
+        print("Post-Install Features")
+        print("="*60)
+        
+        features = self.load_topology_features(topology_dir)
+        if not features:
+            print("  No features configured")
+            return True
+        
+        topology_dir = Path(topology_dir)
+        success = True
+        enabled_features = []
+        
+        # Check which features are enabled
+        for feature_name, config in features.items():
+            if isinstance(config, dict) and config.get('enabled', False):
+                enabled_features.append((feature_name, config))
+        
+        if not enabled_features:
+            print("  All features disabled in features.yaml")
+            return True
+        
+        print(f"  Enabled features: {', '.join(f[0] for f in enabled_features)}")
+        
+        for feature_name, config in enabled_features:
+            print(f"\n  Configuring: {feature_name}")
+            
+            config_file = config.get('config_file')
+            if not config_file:
+                print(f"    ⚠ No config_file specified for {feature_name}")
+                continue
+            
+            local_config_path = topology_dir / config_file
+            if not local_config_path.exists():
+                print(f"    ⚠ Config file not found: {local_config_path}")
+                continue
+            
+            # Determine how to execute based on feature type
+            if feature_name == 'workload_manager':
+                # cm-wlm-setup requires special handling
+                wlm_type = config.get('type', 'slurm')
+                success = self._run_wlm_setup(local_config_path, ssh_config_file, wlm_type) and success
+            elif feature_name == 'bcm_switches':
+                # Switches may need ZTP script copied
+                ztp_script = config.get('ztp_script')
+                if ztp_script:
+                    ztp_path = topology_dir / ztp_script
+                    if ztp_path.exists():
+                        success = self._upload_ztp_script(ztp_path, ssh_config_file) and success
+                success = self._run_cmsh_script(local_config_path, ssh_config_file) and success
+            else:
+                # Default: run as cmsh script
+                success = self._run_cmsh_script(local_config_path, ssh_config_file) and success
+        
+        if success:
+            print("\n  ✓ All features configured successfully")
+        else:
+            print("\n  ⚠ Some features had errors (see above)")
+        
+        return success
+    
+    def _run_cmsh_script(self, local_script_path, ssh_config_file):
+        """Upload and execute a cmsh script on the BCM head node"""
+        remote_script = f"/tmp/{local_script_path.name}"
+        
+        try:
+            # Upload script
+            subprocess.run([
+                'scp', '-F', ssh_config_file,
+                str(local_script_path),
+                f"air-{self.bcm_node_name}:{remote_script}"
+            ], check=True, capture_output=True)
+            
+            # Execute with cmsh
+            result = subprocess.run([
+                'ssh', '-F', ssh_config_file,
+                f"air-{self.bcm_node_name}",
+                f"cmsh -f {remote_script}"
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f"    ✓ {local_script_path.name} executed")
+                return True
+            else:
+                print(f"    ✗ {local_script_path.name} failed: {result.stderr}")
+                return False
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ Error running {local_script_path.name}: {e}")
+            return False
+    
+    def _upload_ztp_script(self, local_ztp_path, ssh_config_file):
+        """Upload ZTP script to BCM's HTTP directory for switch provisioning"""
+        remote_ztp = "/cm/images/default-image/http/cumulus-ztp.sh"
+        
+        try:
+            # Upload to temporary location first, then move with sudo
+            subprocess.run([
+                'scp', '-F', ssh_config_file,
+                str(local_ztp_path),
+                f"air-{self.bcm_node_name}:/tmp/cumulus-ztp.sh"
+            ], check=True, capture_output=True)
+            
+            subprocess.run([
+                'ssh', '-F', ssh_config_file,
+                f"air-{self.bcm_node_name}",
+                f"sudo mkdir -p /cm/images/default-image/http && sudo mv /tmp/cumulus-ztp.sh {remote_ztp} && sudo chmod 644 {remote_ztp}"
+            ], check=True, capture_output=True)
+            
+            print(f"    ✓ ZTP script uploaded to {remote_ztp}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"    ⚠ ZTP script upload failed: {e}")
+            return False
+    
+    def _run_wlm_setup(self, config_path, ssh_config_file, wlm_type):
+        """Run cm-wlm-setup with the provided configuration"""
+        print(f"    Running cm-wlm-setup for {wlm_type}...")
+        
+        try:
+            # Upload config file
+            remote_config = f"/tmp/{config_path.name}"
+            subprocess.run([
+                'scp', '-F', ssh_config_file,
+                str(config_path),
+                f"air-{self.bcm_node_name}:{remote_config}"
+            ], check=True, capture_output=True)
+            
+            # Run cm-wlm-setup
+            result = subprocess.run([
+                'ssh', '-F', ssh_config_file,
+                f"air-{self.bcm_node_name}",
+                f"sudo cm-wlm-setup -c {remote_config}"
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f"    ✓ Workload manager ({wlm_type}) configured")
+                return True
+            else:
+                print(f"    ⚠ cm-wlm-setup returned non-zero: {result.stderr}")
+                return False
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ Error running cm-wlm-setup: {e}")
+            return False
 
 
 def main():
@@ -2072,9 +2260,9 @@ Examples:
     )
     parser.add_argument(
         '--topology',
-        dest='topology_file',
-        default='topologies/default.json',
-        help='Path to JSON topology file. Create custom topologies in NVIDIA Air web UI and export to JSON. (default: topologies/default.json)'
+        dest='topology_path',
+        default='topologies/default',
+        help='Path to topology directory (containing topology.json and features.yaml) or legacy JSON file. (default: topologies/default)'
     )
     parser.add_argument(
         '--name',
@@ -2219,6 +2407,26 @@ Examples:
             simulation_name = deployer.prompt_simulation_name()
             progress.complete_step('simulation_name_set', simulation_name=simulation_name)
         
+        # Resolve topology path (supports directories or legacy JSON files)
+        topology_path = Path(args.topology_path)
+        if topology_path.is_dir():
+            # New structure: topologies/default/ with topology.json inside
+            topology_dir = topology_path
+            topology_file = topology_path / 'topology.json'
+        elif topology_path.suffix == '.json' and topology_path.exists():
+            # Legacy: direct path to JSON file
+            topology_file = topology_path
+            topology_dir = topology_path.parent
+        else:
+            # Try adding .json extension for backward compatibility
+            if (topology_path.parent / f"{topology_path.name}.json").exists():
+                topology_file = topology_path.parent / f"{topology_path.name}.json"
+                topology_dir = topology_path.parent
+            else:
+                print(f"\n✗ Error: Topology not found: {topology_path}")
+                print("  Expected: directory with topology.json or a .json file")
+                sys.exit(1)
+        
         # Step: Create simulation
         if args.resume and progress.is_step_completed('simulation_created'):
             deployer.simulation_id = progress.get('simulation_id')
@@ -2232,7 +2440,6 @@ Examples:
             if deployer.userconfig_id:
                 print(f"  [resume] UserConfig ID: {deployer.userconfig_id}")
         else:
-            topology_file = Path(args.topology_file)
             if not topology_file.exists():
                 print(f"\n✗ Error: Topology file not found: {topology_file}")
                 sys.exit(1)
@@ -2248,7 +2455,8 @@ Examples:
                                    bcm_node_name=deployer.bcm_node_name,
                                    bcm_outbound_interface=deployer.bcm_outbound_interface,
                                    bcm_management_interface=deployer.bcm_management_interface,
-                                   userconfig_id=userconfig_id)
+                                   userconfig_id=userconfig_id,
+                                   topology_dir=str(topology_dir))
         
         # Step: Assign cloud-init to nodes (needs simulation to exist)
         if args.resume and progress.is_step_completed('cloudinit_configured'):
@@ -2333,6 +2541,18 @@ Examples:
                 progress.complete_step('bcm_installed')
         else:
             print("\n--skip-ansible specified, skipping BCM installation")
+        
+        # Step: Post-install features (if features.yaml exists in topology directory)
+        if not args.skip_ansible:
+            if args.resume and progress.is_step_completed('features_configured'):
+                print(f"  [resume] Features already configured")
+            else:
+                # Get topology_dir from progress or current resolution
+                saved_topology_dir = progress.get('topology_dir')
+                feature_topology_dir = Path(saved_topology_dir) if saved_topology_dir else topology_dir
+                
+                deployer.run_post_install_features(feature_topology_dir, ssh_config_file)
+                progress.complete_step('features_configured')
         
         # Mark completed
         progress.complete_step('completed')

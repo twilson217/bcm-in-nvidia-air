@@ -1,0 +1,28 @@
+# switches.cmsh - Add switches to BCM and configure ZTP
+# This file is executed with: cmsh -f switches.cmsh
+# Uncomment and modify the examples below as needed.
+
+# Example: Add a management switch
+# device
+# add ethernetswitch leaf01
+# set leaf01 category Cumulus
+# set leaf01 mac 48:b0:2d:00:01:00
+# set leaf01 ip 192.168.200.10
+# commit
+
+# Example: Configure switch for ZTP provisioning
+# device
+# use leaf01
+# set ztpscript cumulus-ztp.sh
+# set installmode FULL
+# commit
+
+# Example: Add multiple leaf switches
+# device
+# foreach -n leaf0[1-4] (add ethernetswitch %%N; set %%N category Cumulus)
+# commit
+
+# Note: The ZTP script (cumulus-ztp.sh) should be copied to:
+# /cm/images/default-image/http/cumulus-ztp.sh
+# This is handled automatically when bcm_switches feature is enabled.
+

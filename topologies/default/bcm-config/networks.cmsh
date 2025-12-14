@@ -1,0 +1,26 @@
+# networks.cmsh - Define BCM networks
+# This file is executed with: cmsh -f networks.cmsh
+# Uncomment and modify the examples below as needed.
+
+# Example: Create an IPMI network for out-of-band management
+# network
+# add ipminet0
+# set baseaddress 10.0.0.0
+# set netmask 255.255.255.0
+# set domainname ipmi.local
+# commit
+
+# Example: Create a DGX network for GPU fabric
+# network
+# add dgxnet
+# set baseaddress 10.10.0.0
+# set netmask 255.255.0.0
+# set domainname dgx.local
+# commit
+
+# Example: Modify the default internalnet
+# network
+# use internalnet
+# set gateway 192.168.200.254
+# commit
+

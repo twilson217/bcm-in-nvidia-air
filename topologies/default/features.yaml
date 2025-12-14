@@ -1,0 +1,33 @@
+# features.yaml - Controls what gets configured after BCM installation
+# Each feature can be enabled/disabled independently.
+# Config files are relative to this topology directory.
+
+# BCM Networks - Define additional networks (internalnet, ipminet0, dgxnet, etc.)
+bcm_networks:
+  enabled: false
+  config_file: bcm-config/networks.cmsh
+
+# BCM Interfaces - Configure bond0 for BCM head node and compute nodes
+bcm_interfaces:
+  enabled: false
+  config_file: bcm-config/interfaces.cmsh
+
+# BCM Nodes - Add compute nodes to BCM inventory
+bcm_nodes:
+  enabled: false
+  config_file: bcm-config/nodes.cmsh
+
+# BCM Switches - Add switches to BCM and configure ZTP
+bcm_switches:
+  enabled: false
+  config_file: bcm-config/switches.cmsh
+  ztp_script: scripts/cumulus-ztp.sh
+  # switch_configs: Optional directory containing per-switch configuration files
+  # switch_configs_dir: bcm-config/switch-configs/
+
+# Workload Manager - Configure Slurm or Kubernetes
+workload_manager:
+  enabled: false
+  type: slurm  # Options: slurm, kubernetes
+  config_file: bcm-config/cm-wlm-setup.conf
+
