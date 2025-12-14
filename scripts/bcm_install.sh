@@ -173,9 +173,18 @@ echo "  ✓ Ansible installer ready"
 # Step 7: Install BCM Ansible Galaxy collection
 echo "[Step 7/10] Installing Ansible Galaxy collection: ${BCM_COLLECTION}..."
 export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
-# Install our specific collection version (not whatever is in requirements.yml)
+# Install required Ansible collections.
+#
+# NOTE: The Bright installer roles use modules from community collections like:
+#   - community.general.alternatives
+# If these collections are not installed, ansible-playbook fails early with:
+#   ERROR! couldn't resolve module/action 'community.general.alternatives'
+#
+# Since v0.7.0 generates the scaffolding inline (no external requirements.yml),
+# we must install these explicitly.
 ansible-galaxy collection install "${BCM_COLLECTION}" --force
-echo "  ✓ Collection installed: ${BCM_COLLECTION}"
+ansible-galaxy collection install community.general --force
+echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general"
 
 #
 # BCM 10.x on Ubuntu 24.04:
