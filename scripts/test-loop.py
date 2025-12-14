@@ -107,6 +107,75 @@ def _read_progress_sim_id(progress_path: Path) -> Tuple[Optional[str], Optional[
         return None, None
 
 
+def _read_progress_ssh_config(progress_path: Path) -> Optional[str]:
+    """
+    Returns the ssh_config_file from .logs/progress.json if present.
+    """
+    if not progress_path.exists():
+        return None
+    try:
+        import json
+
+        data = json.loads(progress_path.read_text(encoding="utf-8"))
+        return data.get("ssh_config_file")
+    except Exception:
+        return None
+
+
+def _download_failure_logs(test_key: str, ssh_config: Optional[str], sim_name: Optional[str]) -> None:
+    """
+    Download logs from the failed simulation before it's deleted.
+    Saves to .logs/ansible_bcm_install_{test_key}.log
+    """
+    if not ssh_config:
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} WARNING: cannot download logs (no SSH config)")
+        return
+    
+    ssh_config_path = Path(ssh_config)
+    if not ssh_config_path.exists():
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} WARNING: SSH config not found: {ssh_config}")
+        return
+    
+    # Download ansible log
+    remote_log = "/home/ubuntu/ansible_bcm_install.log"
+    local_log = LOG_DIR / f"ansible_bcm_install_{test_key}.log"
+    
+    try:
+        result = subprocess.run(
+            ["scp", "-F", str(ssh_config_path), f"air-bcm-01:{remote_log}", str(local_log)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode == 0:
+            _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} downloaded ansible log to {local_log.name}")
+            print(f"  ✓ Downloaded ansible log to {local_log}")
+        else:
+            _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} ansible log download failed: {result.stderr.strip()[:100]}")
+    except subprocess.TimeoutExpired:
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} ansible log download timed out")
+    except Exception as e:
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} ansible log download error: {e}")
+    
+    # Also try to download the bcm_install.sh script output (if it exists)
+    # The script itself might have failed before creating the ansible log
+    try:
+        # Check if bcm_install.sh exists and get any error output
+        result = subprocess.run(
+            ["ssh", "-F", str(ssh_config_path), "air-bcm-01", 
+             "ls -la /home/ubuntu/bcm_install.sh 2>&1; ls -la /home/ubuntu/bcm-ansible-installer/ 2>&1 || echo 'No bcm-ansible-installer dir'"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            debug_log = LOG_DIR / f"bcm_debug_{test_key}.log"
+            debug_log.write_text(f"Remote state check for {test_key}:\n{result.stdout}\n", encoding="utf-8")
+            _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} saved debug info to {debug_log.name}")
+    except Exception:
+        pass  # Best effort
+
+
 def _air_login_jwt(api_url: str, username: str, api_token: str) -> str:
     login_url = f"{api_url.rstrip('/')}/api/v1/login/"
     resp = requests.post(
@@ -352,6 +421,11 @@ def main() -> int:
         )
 
         if not args.dry_run:
+            # If test failed, download logs BEFORE deleting the simulation
+            if not ok:
+                ssh_config = _read_progress_ssh_config(PROGRESS_JSON)
+                _download_failure_logs(test.key, ssh_config, sim_name)
+            
             # Always attempt cleanup after a run (success or failure).
             if sim_id:
                 try:

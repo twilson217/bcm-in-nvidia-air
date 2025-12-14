@@ -63,11 +63,11 @@ echo "  Upgrading system packages..."
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y -qq
 
 # Ensure we never keep both libglapi-amber and libglapi-mesa installed together.
-# On Ubuntu 24.04 these packages conflict. We standardize on libglapi-mesa.
+# On Ubuntu 24.04 these packages conflict and can break apt.
 echo "  Checking for libglapi-amber/libglapi-mesa conflicts..."
 if dpkg -s libglapi-amber >/dev/null 2>&1 && dpkg -s libglapi-mesa >/dev/null 2>&1; then
-    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-amber..."
-    apt-get remove -y -qq libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-mesa..."
+    apt-get remove -y -qq libglapi-mesa >/dev/null 2>&1 || true
 fi
 
 # Fix any broken dependencies
@@ -172,9 +172,11 @@ echo "  ✓ Collection installed: ${BCM_COLLECTION}"
 
 #
 # BCM 10.x on Ubuntu 24.04:
-# The installer100 collection references both libglapi-amber and libglapi-mesa packages,
-# which conflict on Ubuntu 24.04. We standardize on libglapi-mesa (used by most BCM installations).
-# This function patches the installed Ansible collection to remove package references.
+# The installer100 collection may attempt to install libglapi-mesa alongside libglapi-amber.
+# Those packages conflict (mutually exclusive) on Ubuntu 24.04. To prevent this, we patch the
+# installed Ansible collection in-place to remove references to libglapi-mesa before running
+# the playbook. This ensures libglapi-amber is used for the head node installation.
+# Note: Software images use libglapi-mesa via exclude_software_images_distro_packages.
 #
 patch_collection_remove_pkg() {
     local pkg="$1"
@@ -311,12 +313,13 @@ for p in files:
 PY
 }
 
-# BCM 10.x on Ubuntu 24.04: The installer100 collection may reference libglapi-amber.
-# We standardize on libglapi-mesa, so we patch the collection to remove amber references.
+# BCM 10.x on Ubuntu 24.04: The installer100 collection references both libglapi-amber
+# and libglapi-mesa which conflict. We remove libglapi-mesa references from the collection
+# to ensure libglapi-amber is used during installation.
+# Note: Software images use libglapi-mesa via exclude_software_images_distro_packages.
 if [ "$BCM_VERSION" == "10" ]; then
-    echo "  Applying Ansible collection patch (standardize on libglapi-mesa)..."
-    patch_collection_remove_pkg "libglapi-amber"
-    patch_collection_remove_pkg "libgl1-amber-dri"
+    echo "  Applying Ansible collection patch (prevent libglapi-mesa install during BCM setup)..."
+    patch_collection_remove_pkg "libglapi-mesa"
 else
     echo "  Skipping libglapi collection patch for BCM ${BCM_VERSION} (installer110)"
 fi
