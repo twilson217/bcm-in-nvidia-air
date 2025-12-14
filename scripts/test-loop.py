@@ -28,6 +28,13 @@ DEPLOY_LOG = LOG_DIR / "deploy_bcm_air.log"
 SUMMARY_LOG = LOG_DIR / "test-summary.log"
 PROGRESS_JSON = LOG_DIR / "progress.json"
 
+# rsync --info=progress2 emits frequent carriage-return progress updates that become
+# newline-separated when captured via pipes. We want full progress on the console,
+# but only a single (final) progress line in the file log.
+_RSYNC_PROGRESS_RE = re.compile(
+    r"^\s*\d[\d,]*\s+\d{1,3}%\s+[\d.]+\s*[kMG]B/s\s+\d+:\d{2}:\d{2}\s*$"
+)
+
 
 @dataclass(frozen=True)
 class TestCase:
@@ -234,6 +241,9 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tup
 
     # Stream output to console + deploy log in real time.
     with DEPLOY_LOG.open("a", encoding="utf-8") as log_f:
+        in_iso_rsync = False
+        last_rsync_progress: Optional[str] = None
+
         p = subprocess.Popen(
             cmd,
             cwd=str(REPO_ROOT),
@@ -245,7 +255,31 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tup
         )
         assert p.stdout is not None
         for line in p.stdout:
+            # Always show full output on console
             sys.stdout.write(line)
+
+            # Decide what to write to the file log.
+            # While rsync is running, keep only the latest progress line in memory
+            # and write it once when the upload completes.
+            stripped = line.replace("\r", "").rstrip("\n")
+
+            # Heuristic boundaries for ISO upload phase (rsync progress spam).
+            if "📦 Uploading BCM ISO to head node" in stripped:
+                in_iso_rsync = True
+                last_rsync_progress = None
+
+            if in_iso_rsync and _RSYNC_PROGRESS_RE.match(stripped):
+                last_rsync_progress = stripped
+                continue  # don't spam file log with progress lines
+
+            # When ISO upload completes, flush the last rsync progress line once.
+            if in_iso_rsync and ("✓ ISO uploaded successfully" in stripped or "✗ ISO upload failed" in stripped):
+                if last_rsync_progress:
+                    log_f.write(f"[rsync] {last_rsync_progress}\n")
+                in_iso_rsync = False
+                last_rsync_progress = None
+
+            # Default: write line as-is
             log_f.write(line)
 
             # Capture sim name/id from deploy_bcm_air.py output so cleanup works even if
