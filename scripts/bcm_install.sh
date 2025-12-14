@@ -63,11 +63,15 @@ echo "  Upgrading system packages..."
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y -qq
 
 # Ensure we never keep both libglapi-amber and libglapi-mesa installed together.
-# On Ubuntu 24.04 these packages conflict and can break apt.
+# On Ubuntu 24.04 these packages conflict. We standardize on libglapi-mesa.
 echo "  Checking for libglapi-amber/libglapi-mesa conflicts..."
 if dpkg -s libglapi-amber >/dev/null 2>&1 && dpkg -s libglapi-mesa >/dev/null 2>&1; then
-    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-mesa..."
-    apt-get remove -y -qq libglapi-mesa >/dev/null 2>&1 || true
+    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-amber..."
+    apt-get remove -y -qq libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+elif dpkg -s libglapi-amber >/dev/null 2>&1; then
+    # Only amber is installed - remove it to make way for mesa
+    echo "  ⚠ libglapi-amber installed; removing to standardize on libglapi-mesa..."
+    apt-get remove -y -qq libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
 fi
 
 # Fix any broken dependencies
@@ -172,11 +176,10 @@ echo "  ✓ Collection installed: ${BCM_COLLECTION}"
 
 #
 # BCM 10.x on Ubuntu 24.04:
-# The installer100 collection may attempt to install libglapi-mesa alongside libglapi-amber.
-# Those packages conflict (mutually exclusive) on Ubuntu 24.04. To prevent this, we patch the
-# installed Ansible collection in-place to remove references to libglapi-mesa before running
-# the playbook. This ensures libglapi-amber is used for the head node installation.
-# Note: Software images use libglapi-mesa via exclude_software_images_distro_packages.
+# The installer100 collection references both libglapi-amber and libglapi-mesa packages,
+# which conflict on Ubuntu 24.04. We standardize on libglapi-mesa (used by most BCM installations).
+# This function patches the Ansible collection to remove ONLY YAML list entries for amber packages.
+# It's careful not to remove lines where the package name appears in other contexts (file paths, etc.)
 #
 patch_collection_remove_pkg() {
     local pkg="$1"
@@ -202,25 +205,59 @@ patch_collection_remove_pkg() {
 
     echo "  Patching collection at: ${col_dir}"
 
-    # Find any files referencing the package and remove those lines.
-    # This is intentionally blunt: if the collection is listing the package, we strip it.
-    local files
-    files="$(grep -RIl -- "${pkg}" "${col_dir}" || true)"
-    if [ -z "$files" ]; then
-        echo "  ✓ No ${pkg} references found in collection"
-        return 0
-    fi
+    # Use Python for safer YAML-aware patching
+    # Only removes lines that are YAML list items (- package_name), not other references
+    export PKG_TO_REMOVE="$pkg"
+    export COL_DIR="$col_dir"
+    
+    python3 - <<'PYTHON_PATCH'
+import os
+import re
+from pathlib import Path
 
-    echo "  Removing ${pkg} references from collection files..."
-    while IFS= read -r f; do
-        sed -i "/${pkg}/d" "$f" || true
-    done <<< "$files"
+pkg = os.environ.get("PKG_TO_REMOVE", "")
+col_dir = Path(os.environ.get("COL_DIR", ""))
 
-    if grep -RIl -- "${pkg}" "${col_dir}" >/dev/null 2>&1; then
-        echo "  ⚠ ${pkg} still referenced after patch (continuing anyway)"
-    else
-        echo "  ✓ ${pkg} successfully removed from collection"
-    fi
+if not pkg or not col_dir.exists():
+    print(f"  ⚠ Invalid patch parameters")
+    exit(0)
+
+# Pattern to match YAML list items containing the package
+# Matches: "  - libglapi-amber" or "- libglapi-amber" (with optional quotes)
+yaml_list_pattern = re.compile(
+    rf'^(\s*-\s*)["\']?{re.escape(pkg)}["\']?\s*(#.*)?$',
+    re.MULTILINE
+)
+
+files_patched = 0
+lines_removed = 0
+
+# Only look at YAML files in vars/ and defaults/ directories (package lists)
+for subdir in ["vars", "defaults", "roles/*/vars", "roles/*/defaults"]:
+    for yml_file in col_dir.glob(f"**/{subdir}/*.yml"):
+        try:
+            content = yml_file.read_text(encoding="utf-8", errors="ignore")
+            
+            # Count matches before removal
+            matches = yaml_list_pattern.findall(content)
+            if matches:
+                # Remove matching lines (only YAML list items)
+                new_content = yaml_list_pattern.sub("", content)
+                # Clean up any resulting double newlines
+                new_content = re.sub(r'\n\n\n+', '\n\n', new_content)
+                
+                if new_content != content:
+                    yml_file.write_text(new_content, encoding="utf-8")
+                    files_patched += 1
+                    lines_removed += len(matches)
+        except Exception as e:
+            pass  # Best effort
+
+if lines_removed > 0:
+    print(f"  ✓ Removed {lines_removed} {pkg} entries from {files_patched} file(s)")
+else:
+    print(f"  ✓ No {pkg} YAML list entries found in collection")
+PYTHON_PATCH
 }
 
 patch_collection_insert_ignore_errors_for_task() {
@@ -314,12 +351,12 @@ PY
 }
 
 # BCM 10.x on Ubuntu 24.04: The installer100 collection references both libglapi-amber
-# and libglapi-mesa which conflict. We remove libglapi-mesa references from the collection
-# to ensure libglapi-amber is used during installation.
-# Note: Software images use libglapi-mesa via exclude_software_images_distro_packages.
+# and libglapi-mesa which conflict. We standardize on libglapi-mesa, so we remove
+# amber package references from the collection's package lists.
 if [ "$BCM_VERSION" == "10" ]; then
-    echo "  Applying Ansible collection patch (prevent libglapi-mesa install during BCM setup)..."
-    patch_collection_remove_pkg "libglapi-mesa"
+    echo "  Applying Ansible collection patch (standardize on libglapi-mesa)..."
+    patch_collection_remove_pkg "libglapi-amber"
+    patch_collection_remove_pkg "libgl1-amber-dri"
 else
     echo "  Skipping libglapi collection patch for BCM ${BCM_VERSION} (installer110)"
 fi
