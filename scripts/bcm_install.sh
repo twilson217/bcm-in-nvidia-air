@@ -250,7 +250,7 @@ lines_removed = 0
 
 # Only look at YAML files in vars/ and defaults/ directories (package lists)
 for subdir in ["vars", "defaults", "roles/*/vars", "roles/*/defaults"]:
-    for yml_file in col_dir.glob(f"**/{subdir}/*.yml"):
+    for yml_file in list(col_dir.glob(f"**/{subdir}/*.yml")) + list(col_dir.glob(f"**/{subdir}/*.yaml")):
         try:
             content = yml_file.read_text(encoding="utf-8", errors="ignore")
             
@@ -424,6 +424,14 @@ timezone: UTC
 # Workaround: prevent software-image creation from installing both libglapi-amber and libglapi-mesa.
 # On Ubuntu 24.04, libglapi-amber conflicts with libglapi-mesa. The installer’s cm-create-image
 # distro package list includes both mesa and amber-dri; excluding amber-dri avoids the conflict.
+#
+# Also exclude amber packages from the HEAD NODE distro package install step.
+# Without this, installer100 may try to install libgl1-amber-dri (pulling libglapi-amber)
+# while libglapi-mesa is present, causing:
+#   libglapi-amber : Breaks: libglapi-mesa
+exclude_distribution_packages:
+  - libgl1-amber-dri
+  - libglapi-amber
 exclude_software_images_distro_packages:
   - libgl1-amber-dri
   - libglapi-amber
