@@ -139,15 +139,17 @@ INVENTORY
 echo "  ✓ inventory/hosts created"
 
 # Create requirements-control-node.txt
-# IMPORTANT: brightcomputing installer collections are sensitive to Ansible versions.
-# We pin to a known-good Ansible core line to avoid unsupported Ansible releases
-# (e.g., 2.20.x) breaking lookups like first_found.
+# The Bright installer docs require Ansible 8.3+ for local/control-node runs.
+# Use the full 'ansible' package (includes ansible-core) to match the typical
+# Bright installer expectations and reduce surprises vs ansible-core-only installs.
 cat > requirements-control-node.txt <<'REQUIREMENTS'
-ansible-core==2.15.13
-PyMySQL
-python-ldap
+jmespath==0.10.0
+xmltodict==0.12.0
+netaddr
+paramiko
+ansible==8.6.*
 REQUIREMENTS
-echo "  ✓ requirements-control-node.txt created (ansible-core==2.15.13)"
+echo "  ✓ requirements-control-node.txt created (ansible==8.6.*)"
 
 # Create playbook.yml with the correct role for this BCM version
 cat > playbook.yml <<PLAYBOOK
@@ -185,7 +187,8 @@ export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
 ansible-galaxy collection install "${BCM_COLLECTION}" --force
 ansible-galaxy collection install community.general --force
 ansible-galaxy collection install community.mysql --force
-echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general, community.mysql"
+ansible-galaxy collection install community.crypto --force
+echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general, community.mysql, community.crypto"
 
 #
 # BCM 10.x on Ubuntu 24.04:
