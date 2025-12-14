@@ -139,12 +139,15 @@ INVENTORY
 echo "  ✓ inventory/hosts created"
 
 # Create requirements-control-node.txt
+# IMPORTANT: brightcomputing installer collections are sensitive to Ansible versions.
+# We pin to a known-good Ansible core line to avoid unsupported Ansible releases
+# (e.g., 2.20.x) breaking lookups like first_found.
 cat > requirements-control-node.txt <<'REQUIREMENTS'
-ansible>=2.15
+ansible-core==2.15.13
 PyMySQL
 python-ldap
 REQUIREMENTS
-echo "  ✓ requirements-control-node.txt created"
+echo "  ✓ requirements-control-node.txt created (ansible-core==2.15.13)"
 
 # Create playbook.yml with the correct role for this BCM version
 cat > playbook.yml <<PLAYBOOK
