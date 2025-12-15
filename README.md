@@ -2,7 +2,7 @@
 
 # Automated BCM Deployment on NVIDIA Air
 
-This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
+This repository provides automated deployment of Base Command Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
 
 ## Table of Contents
 
@@ -595,7 +595,7 @@ pip install -r requirements.txt
 ## Additional Resources
 
 - [NVIDIA Air Documentation](https://docs.nvidia.com/networking-ethernet-software/nvidia-air/)
-- [Bright Cluster Manager Documentation](https://www.brightcomputing.com/documentation)
+- [Base Command Manager Documentation](https://www.brightcomputing.com/documentation)
 - [Ansible Galaxy - BCM 10.x Collection](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm100/)
 - [Ansible Galaxy - BCM 11.x Collection](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm110/)
 

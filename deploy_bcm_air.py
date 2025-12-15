@@ -2,7 +2,7 @@
 """
 NVIDIA Air BCM Deployment Automation
 
-This script automates the deployment of Bright Cluster Manager (BCM) on NVIDIA Air
+This script automates the deployment of Base Command Manager (BCM) on NVIDIA Air
 using stock Ubuntu 24.04 images and Ansible Galaxy playbooks.
 """
 
