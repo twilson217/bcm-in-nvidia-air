@@ -770,13 +770,16 @@ User Machine                     SSH Proxy                    bcm-01 (head node)
 
 ### Timeline
 
-| Time | Milestone |
-|------|-----------|
-| 0 min | Start deployment |
-| 1 min | Simulation created & starting |
-| 5 min | Simulation loaded, SSH enabled |
-| 15-25 min | ISO upload complete |
-| 55-70 min | BCM installation complete |
+| Phase | Duration | Description |
+|-------|----------|-------------|
+| Create simulation | ~1 min | API call to create and configure simulation |
+| Start & load | ~4 min | Boot VMs, wait for simulation to be ready |
+| Enable SSH | ~1 min | Create SSH service, verify connectivity |
+| Upload ISO | 7-25 min | Transfer BCM ISO to head node (varies by size) |
+| Run Ansible | 10-25 min | BCM installation via Ansible playbook |
+| **Estimated Total** | **25-55 min** | **End-to-end deployment time** |
+
+*ISO upload times vary by version: BCM 11.x (~5GB) ≈ 7-10 min, BCM 10.30.0 (~7GB) ≈ 10-14 min, BCM 10.25.03 (~13GB) ≈ 19-25 min.*
 
 ### Key Components
 
