@@ -501,6 +501,23 @@ fi
 # Step 10: Post-installation configuration
 echo "[Step 10/10] Post-installation configuration..."
 
+# Install BCM apt repositories from the ISO
+# These packages set up the BCM apt sources for future package installations
+# Package location: /mnt/dvd/data/packages/<VERSION>/ubuntu/2404/all/cm-config-apt*.deb
+echo "  Installing BCM apt repositories..."
+BCM_APT_PKGS="${BCM_MOUNT_PATH}/data/packages/${BCM_FULL_VERSION}/ubuntu/2404/all/cm-config-apt*.deb"
+if compgen -G "${BCM_APT_PKGS}" > /dev/null 2>&1; then
+    # Use apt install with the glob pattern to install all matching packages
+    apt-get install -y -qq ${BCM_APT_PKGS} 2>&1 || {
+        echo "  ⚠ Failed to install apt repos, trying dpkg..."
+        dpkg -i ${BCM_APT_PKGS} 2>/dev/null || true
+    }
+    echo "  ✓ BCM apt repositories installed"
+else
+    echo "  ⚠ No cm-config-apt packages found at: ${BCM_APT_PKGS}"
+    echo "    (This is expected for some BCM versions or ISO layouts)"
+fi
+
 # Enable TFTP for PXE boot
 systemctl enable tftpd.socket 2>/dev/null || true
 systemctl start tftpd.socket 2>/dev/null || true
