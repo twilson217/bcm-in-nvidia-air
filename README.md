@@ -779,7 +779,7 @@ User Machine                     SSH Proxy                    bcm-01 (head node)
 | Run Ansible | 10-25 min | BCM installation via Ansible playbook |
 | **Estimated Total** | **25-55 min** | **End-to-end deployment time** |
 
-*ISO upload times vary by version: BCM 11.x (~5GB) ≈ 7-10 min, BCM 10.30.0 (~7GB) ≈ 10-14 min, BCM 10.25.03 (~13GB) ≈ 19-25 min.*
+*ISO upload times vary by version: BCM 10.30.0 (~5GB) ≈ 7-10 min, BCM 10.25.03 (~7GB) ≈ 10-14 min, BCM 11.x (~13GB) ≈ 19-25 min.*
 
 ### Key Components
 
