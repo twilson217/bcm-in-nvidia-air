@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Update SSH config files with VNC console forwarding for NVIDIA Air simulation nodes.
+Get VNC console connection information for NVIDIA Air simulation nodes.
 
-This script:
-1. Lists all simulations accessible via the configured .env credentials
-2. Matches simulation names to SSH config files in .ssh/
-3. Verifies the simulation ID in the config matches the API
-4. Adds host entries with LocalForward for VNC console access
+This script outputs SSH tunnel commands and VNC passwords for connecting
+to node consoles via VNC.
 
 Usage:
-  python scripts/vnc-console-connect.py
-  python scripts/vnc-console-connect.py --env .env.internal
+  python scripts/vnc-console-connect.py                    # Auto-detect simulation
+  python scripts/vnc-console-connect.py --sim-id <uuid>    # Specify by ID
+  python scripts/vnc-console-connect.py --sim-name <name>  # Specify by name
+  python scripts/vnc-console-connect.py --ssh-config       # Update SSH config file
 """
 
 from __future__ import annotations
@@ -80,9 +79,31 @@ def get_all_simulations(api_url: str, jwt: str) -> List[dict]:
     return data.get("results", data) if isinstance(data, dict) else data
 
 
+def find_simulation_by_name(api_url: str, jwt: str, name: str) -> Optional[str]:
+    """Find simulation ID by name."""
+    simulations = get_all_simulations(api_url, jwt)
+    for sim in simulations:
+        if sim.get("title") == name or sim.get("name") == name:
+            return sim.get("id")
+    return None
+
+
 def get_simulation_nodes(api_url: str, jwt: str, sim_id: str) -> List[dict]:
     """Get simulation nodes."""
     url = f"{api_url.rstrip('/')}/api/v2/simulations/nodes/?simulation={sim_id}"
+    resp = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {jwt}"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("results", data) if isinstance(data, dict) else data
+
+
+def get_simulation_services(api_url: str, jwt: str, sim_id: str) -> List[dict]:
+    """Get services for a simulation."""
+    url = f"{api_url.rstrip('/')}/api/v2/simulations/services/?simulation={sim_id}"
     resp = requests.get(
         url,
         headers={"Authorization": f"Bearer {jwt}"},
@@ -128,10 +149,8 @@ def parse_ssh_config(config_path: Path) -> Tuple[Optional[str], Optional[str], s
     sim_id = None
     
     for line in content.splitlines():
-        # Look for: # Simulation: <name>
         if line.startswith("# Simulation:"):
             sim_name = line.split(":", 1)[1].strip()
-        # Look for: # Simulation ID: <uuid>
         elif line.startswith("# Simulation ID:"):
             sim_id = line.split(":", 1)[1].strip()
     
@@ -144,7 +163,6 @@ def find_bcm_host_config(content: str) -> Optional[dict]:
     
     Returns dict with: hostname, port, user, identity_file
     """
-    # Look for the air-bcm-01 or bcm host entry
     pattern = r"Host\s+(?:air-bcm-01|bcm)\s*\n((?:\s+\S+.*\n)*)"
     match = re.search(pattern, content, re.IGNORECASE)
     
@@ -176,7 +194,7 @@ def find_bcm_host_config(content: str) -> Optional[dict]:
 def remove_vnc_host_entries(content: str) -> str:
     """
     Remove any existing VNC console host entries (those with LocalForward).
-    Also removes VNC header comments.
+    Also removes VNC header comments and VNC password comments.
     Preserves the header and main SSH entries (air-bcm-01, bcm).
     """
     lines = content.splitlines()
@@ -191,6 +209,9 @@ def remove_vnc_host_entries(content: str) -> str:
             continue
         if line.strip().startswith("#        Then connect VNC"):
             continue
+        # Skip VNC password comments (format: # VNC Password: ...)
+        if line.strip().startswith("# VNC Password:"):
+            continue
         
         # Check if this is a Host line
         if line.strip().startswith("Host "):
@@ -201,7 +222,6 @@ def remove_vnc_host_entries(content: str) -> str:
                 result.append(line)
             else:
                 # Check if the next lines contain LocalForward (VNC entry)
-                # Look ahead to see if this block has LocalForward
                 has_localforward = False
                 for j in range(i + 1, min(i + 10, len(lines))):
                     if lines[j].strip().startswith("Host "):
@@ -211,17 +231,16 @@ def remove_vnc_host_entries(content: str) -> str:
                         break
                 
                 if has_localforward:
-                    skip_block = True  # Skip this entire block
+                    skip_block = True
                 else:
                     skip_block = False
                     result.append(line)
         elif skip_block:
-            # Skip lines in a VNC block
             continue
         else:
             result.append(line)
     
-    # Clean up trailing newlines and ensure we end with one
+    # Clean up trailing newlines
     while result and result[-1] == "":
         result.pop()
     
@@ -236,9 +255,11 @@ def generate_vnc_host_entry(
     identity_file: str,
     internal_ip: str,
     console_port: int,
+    vnc_password: str,
 ) -> str:
     """Generate an SSH config host entry for VNC console access."""
-    return f"""Host {node_name}
+    return f"""# VNC Password: {vnc_password}
+Host {node_name}
   HostName {worker_hostname}
   Port {ssh_port}
   User {user}
@@ -250,10 +271,212 @@ def generate_vnc_host_entry(
 """
 
 
+def find_ssh_service_port(api_url: str, jwt: str, sim_id: str, worker_hostname: str) -> Optional[str]:
+    """
+    Find the SSH service port for a simulation.
+    
+    Looks for an SSH service whose dest_host matches the worker_hostname.
+    Returns the external port (dest_port) or None if not found.
+    """
+    services = get_simulation_services(api_url, jwt, sim_id)
+    
+    for svc in services:
+        # Look for SSH services (typically name contains 'ssh' or service is on port 22)
+        svc_name = svc.get("name", "").lower()
+        interface = svc.get("interface", {})
+        
+        # Check if this is an SSH service
+        if "ssh" in svc_name or svc.get("src_port") == 22:
+            dest_host = svc.get("dest_host", "")
+            dest_port = svc.get("dest_port")
+            
+            # Check if the dest_host matches our worker hostname
+            if dest_host == worker_hostname and dest_port:
+                return str(dest_port)
+    
+    return None
+
+
+def match_simulation_to_ssh_config(simulations: List[dict]) -> Tuple[Optional[dict], Optional[Path], Optional[dict]]:
+    """
+    Try to match simulations to SSH config files in .ssh/ directory.
+    
+    Returns: (matched_simulation, config_path, bcm_config) or (None, None, None)
+    """
+    if not SSH_DIR.exists():
+        return None, None, None
+    
+    sim_by_name: Dict[str, dict] = {}
+    for sim in simulations:
+        title = sim.get("title") or sim.get("name")
+        if title:
+            sim_by_name[title] = sim
+    
+    for config_file in SSH_DIR.iterdir():
+        if config_file.is_dir() or config_file.name.startswith("."):
+            continue
+        
+        config_name = config_file.name
+        
+        if config_name not in sim_by_name:
+            continue
+        
+        sim = sim_by_name[config_name]
+        sim_id = sim.get("id")
+        
+        # Parse the SSH config to verify simulation ID
+        file_sim_name, file_sim_id, content = parse_ssh_config(config_file)
+        
+        if file_sim_id and file_sim_id != sim_id:
+            continue
+        
+        # Get BCM host connection details
+        bcm_config = find_bcm_host_config(content)
+        if bcm_config:
+            return sim, config_file, bcm_config
+    
+    return None, None, None
+
+
+def prompt_user_selection(simulations: List[dict]) -> Optional[dict]:
+    """
+    Prompt user to select from a list of simulations.
+    
+    Returns selected simulation or None if cancelled.
+    """
+    print("\nAvailable simulations:")
+    print("-" * 50)
+    for i, sim in enumerate(simulations, 1):
+        title = sim.get("title") or sim.get("name") or "Unnamed"
+        state = sim.get("state", "unknown")
+        print(f"  {i}. {title} ({state})")
+    print()
+    
+    try:
+        choice = input("Select simulation number (or 'q' to quit): ").strip()
+        if choice.lower() == 'q':
+            return None
+        
+        idx = int(choice) - 1
+        if 0 <= idx < len(simulations):
+            return simulations[idx]
+        else:
+            print("Invalid selection.")
+            return None
+    except (ValueError, EOFError, KeyboardInterrupt):
+        return None
+
+
+def print_vnc_info(
+    nodes: List[dict],
+    ssh_service_port: Optional[str],
+    worker_hostname: Optional[str],
+) -> None:
+    """Print VNC connection information for all nodes."""
+    print()
+    print("=" * 70)
+    print("VNC CONSOLE CONNECTION INFO")
+    print("=" * 70)
+    
+    if not ssh_service_port:
+        print()
+        print("⚠ You must create an SSH service for your simulation before you can")
+        print("  use VNC to connect to a console.")
+        print()
+        return
+    
+    for node in nodes:
+        name = node.get("name", "unknown")
+        console_url = node.get("console_url", "")
+        console_port = node.get("console_port")
+        console_password = node.get("console_password", "")
+        state = node.get("state", "unknown")
+        
+        print()
+        print(f"Host: {name}")
+        print(f"  State: {state}")
+        
+        if not console_url or not console_port:
+            print("  (No console available)")
+            continue
+        
+        node_worker, internal_ip, _ = parse_console_url(console_url)
+        display_hostname = worker_hostname or node_worker
+        
+        print(f"  SSH Tunnel: ssh -L {console_port}:{internal_ip}:{console_port} {display_hostname} -p {ssh_service_port}")
+        print(f"  VNC Connect: localhost:{console_port}")
+        print(f"  VNC Password: {console_password}")
+    
+    print()
+
+
+def update_ssh_config(
+    config_path: Path,
+    nodes: List[dict],
+    bcm_config: dict,
+) -> int:
+    """Update SSH config file with VNC host entries."""
+    content = config_path.read_text(encoding="utf-8")
+    
+    # Remove existing VNC entries
+    clean_content = remove_vnc_host_entries(content)
+    
+    # Generate new VNC host entries
+    vnc_entries = []
+    vnc_entries.append(f"# VNC Console Hosts (auto-generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
+    vnc_entries.append("# Usage: ssh -F .ssh/<sim-name> <host-name>")
+    vnc_entries.append("#        Then connect VNC client to localhost:<port>")
+    vnc_entries.append("")
+    
+    node_count = 0
+    for node in nodes:
+        name = node.get("name", "unknown")
+        console_url = node.get("console_url", "")
+        console_port = node.get("console_port")
+        console_password = node.get("console_password", "")
+        
+        if not console_url or not console_port:
+            continue
+        
+        _, internal_ip, _ = parse_console_url(console_url)
+        
+        entry = generate_vnc_host_entry(
+            node_name=name,
+            worker_hostname=bcm_config["hostname"],
+            ssh_port=bcm_config["port"],
+            user=bcm_config.get("user", "ubuntu"),
+            identity_file=bcm_config.get("identity_file", "~/.ssh/id_rsa"),
+            internal_ip=internal_ip,
+            console_port=console_port,
+            vnc_password=console_password,
+        )
+        vnc_entries.append(entry)
+        node_count += 1
+    
+    if node_count == 0:
+        print("  ⚠ No nodes with VNC console available")
+        return 0
+    
+    # Write updated content
+    new_content = clean_content + "\n" + "\n".join(vnc_entries)
+    config_path.write_text(new_content, encoding="utf-8")
+    
+    print(f"  ✓ Added {node_count} VNC host entries to {config_path.name}")
+    print()
+    print(f"Usage: ssh -F .ssh/{config_path.name} <host-name>")
+    print("       Then connect VNC client to localhost:<port>")
+    
+    return node_count
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Update SSH config files with VNC console forwarding for NVIDIA Air nodes.",
+        description="Get VNC console connection information for NVIDIA Air simulation nodes.",
     )
+    
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--sim-id", help="Simulation UUID")
+    group.add_argument("--sim-name", help="Simulation name")
     
     parser.add_argument(
         "--env",
@@ -261,9 +484,9 @@ def main() -> int:
         help="Path to env file (default: .env)",
     )
     parser.add_argument(
-        "--dry-run",
+        "--ssh-config",
         action="store_true",
-        help="Show what would be done without making changes",
+        help="Update matching SSH config file with VNC host entries",
     )
     
     args = parser.parse_args()
@@ -290,148 +513,117 @@ def main() -> int:
     
     api_url = env.get("AIR_API_URL", "https://air.nvidia.com")
     
-    print(f"Using API: {api_url}")
-    print(f"Using env: {env_path.name}")
-    print()
-    
-    # Check if .ssh directory exists
-    if not SSH_DIR.exists():
-        print(f"✗ SSH config directory not found: {SSH_DIR}", file=sys.stderr)
-        return 1
-    
     try:
         # Authenticate
-        print("Authenticating...")
         jwt = air_login(api_url, username, api_token)
-        print("✓ Authenticated")
-        print()
         
-        # Get all simulations
-        print("Fetching simulations...")
-        simulations = get_all_simulations(api_url, jwt)
-        print(f"✓ Found {len(simulations)} simulation(s)")
-        print()
+        sim_id: Optional[str] = None
+        sim_name: Optional[str] = None
+        config_path: Optional[Path] = None
+        bcm_config: Optional[dict] = None
+        ssh_service_port: Optional[str] = None
+        worker_hostname: Optional[str] = None
         
-        # Build a map of simulation name -> simulation info
-        sim_by_name: Dict[str, dict] = {}
-        for sim in simulations:
-            title = sim.get("title") or sim.get("name")
-            if title:
-                sim_by_name[title] = sim
-        
-        # Scan SSH config files
-        updated_configs = []
-        
-        for config_file in SSH_DIR.iterdir():
-            if config_file.is_dir() or config_file.name.startswith("."):
-                continue
+        # If user specified sim-id or sim-name, use that
+        if args.sim_id:
+            sim_id = args.sim_id
+        elif args.sim_name:
+            sim_id = find_simulation_by_name(api_url, jwt, args.sim_name)
+            if not sim_id:
+                print(f"✗ Simulation not found: {args.sim_name}", file=sys.stderr)
+                return 1
+            sim_name = args.sim_name
+        else:
+            # Auto-detect simulation
+            simulations = get_all_simulations(api_url, jwt)
             
-            config_name = config_file.name
+            if not simulations:
+                print("✗ No simulations found", file=sys.stderr)
+                return 1
             
-            # Check if filename matches a simulation name
-            if config_name not in sim_by_name:
-                print(f"⊘ {config_name}: No matching simulation found")
-                continue
+            # Try to match to SSH config files first
+            matched_sim, config_path, bcm_config = match_simulation_to_ssh_config(simulations)
             
-            sim = sim_by_name[config_name]
-            sim_id = sim.get("id")
-            sim_state = sim.get("state", "unknown")
-            
-            # Parse the SSH config to verify simulation ID
-            file_sim_name, file_sim_id, content = parse_ssh_config(config_file)
-            
-            if file_sim_id and file_sim_id != sim_id:
-                print(f"⚠ {config_name}: Simulation ID mismatch!")
-                print(f"   Config file has: {file_sim_id}")
-                print(f"   API reports:     {sim_id}")
-                continue
-            
-            print(f"✓ {config_name}: Matched simulation (state: {sim_state})")
-            
-            # Get BCM host connection details from config
-            bcm_config = find_bcm_host_config(content)
-            if not bcm_config:
-                print(f"  ⚠ Could not find air-bcm-01/bcm host entry in config")
-                continue
-            
-            # Get nodes for this simulation
-            nodes = get_simulation_nodes(api_url, jwt, sim_id)
-            if not nodes:
-                print(f"  ⚠ No nodes found for simulation")
-                continue
-            
-            # Sort nodes by name
-            nodes.sort(key=lambda n: n.get("name", ""))
-            
-            # Remove existing VNC host entries
-            clean_content = remove_vnc_host_entries(content)
-            
-            # Generate new VNC host entries
-            vnc_entries = []
-            vnc_entries.append(f"# VNC Console Hosts (auto-generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')})")
-            vnc_entries.append("# Usage: ssh -F .ssh/<sim-name> <host-name>")
-            vnc_entries.append("#        Then connect VNC client to localhost:<port>")
-            vnc_entries.append("")
-            
-            node_entries = []
-            for node in nodes:
-                name = node.get("name", "unknown")
-                console_url = node.get("console_url", "")
-                console_port = node.get("console_port")
-                console_password = node.get("console_password", "")
+            if matched_sim:
+                sim_id = matched_sim.get("id")
+                sim_name = matched_sim.get("title") or matched_sim.get("name")
+                print(f"✓ Matched simulation: {sim_name}")
                 
-                if not console_url or not console_port:
-                    continue
-                
-                worker_hostname, internal_ip, _ = parse_console_url(console_url)
-                
-                entry = generate_vnc_host_entry(
-                    node_name=name,
-                    worker_hostname=bcm_config["hostname"],
-                    ssh_port=bcm_config["port"],
-                    user=bcm_config.get("user", "ubuntu"),
-                    identity_file=bcm_config.get("identity_file", "~/.ssh/id_rsa"),
-                    internal_ip=internal_ip,
-                    console_port=console_port,
-                )
-                vnc_entries.append(entry)
-                node_entries.append((name, console_port, console_password))
-            
-            if not node_entries:
-                print(f"  ⚠ No nodes with VNC console available")
-                continue
-            
-            # Combine content
-            new_content = clean_content + "\n" + "\n".join(vnc_entries)
-            
-            if args.dry_run:
-                print(f"  Would add {len(node_entries)} VNC host entries")
-                for name, port, _ in node_entries:
-                    print(f"    - {name} (port {port})")
+                if bcm_config:
+                    ssh_service_port = bcm_config.get("port")
+                    worker_hostname = bcm_config.get("hostname")
             else:
-                config_file.write_text(new_content, encoding="utf-8")
-                print(f"  ✓ Added {len(node_entries)} VNC host entries")
-                updated_configs.append((config_name, node_entries))
+                # No SSH config match, check simulation count
+                if len(simulations) == 1:
+                    sim = simulations[0]
+                    sim_id = sim.get("id")
+                    sim_name = sim.get("title") or sim.get("name")
+                    print(f"✓ Using simulation: {sim_name}")
+                elif len(simulations) <= 9:
+                    sim = prompt_user_selection(simulations)
+                    if not sim:
+                        print("Cancelled.")
+                        return 0
+                    sim_id = sim.get("id")
+                    sim_name = sim.get("title") or sim.get("name")
+                else:
+                    print("Oh, my... you have a lot of simulations.")
+                    print("Please use the --sim-id or --sim-name options to specify.")
+                    return 1
         
-        print()
+        if not sim_id:
+            print("✗ Could not determine simulation", file=sys.stderr)
+            return 1
         
-        # Print usage instructions
-        if updated_configs and not args.dry_run:
-            print("=" * 70)
-            print("USAGE")
-            print("=" * 70)
-            print()
-            for config_name, node_entries in updated_configs:
-                print(f"To connect to VNC consoles in simulation '{config_name}':")
-                print()
-                for name, port, password in node_entries[:3]:  # Show first 3 as examples
-                    print(f"  ssh -F .ssh/{config_name} {name}")
-                    print(f"  # Then connect VNC to localhost:{port}")
-                    print(f"  # VNC Password: {password}")
-                    print()
-                if len(node_entries) > 3:
-                    print(f"  ... and {len(node_entries) - 3} more hosts")
-                    print()
+        # Get nodes
+        nodes = get_simulation_nodes(api_url, jwt, sim_id)
+        
+        if not nodes:
+            print("✗ No nodes found in simulation", file=sys.stderr)
+            return 1
+        
+        # Sort by name
+        nodes.sort(key=lambda n: n.get("name", ""))
+        
+        # If we don't have SSH service info from config, look it up via API
+        if not ssh_service_port:
+            # Get worker hostname from first node with console_url
+            for node in nodes:
+                console_url = node.get("console_url", "")
+                if console_url:
+                    worker_hostname, _, _ = parse_console_url(console_url)
+                    break
+            
+            if worker_hostname:
+                ssh_service_port = find_ssh_service_port(api_url, jwt, sim_id, worker_hostname)
+        
+        # Handle --ssh-config mode
+        if args.ssh_config:
+            if not config_path:
+                # Try to find matching config for this simulation
+                simulations = get_all_simulations(api_url, jwt)
+                for sim in simulations:
+                    if sim.get("id") == sim_id:
+                        sim_name = sim.get("title") or sim.get("name")
+                        break
+                
+                if sim_name and SSH_DIR.exists():
+                    potential_config = SSH_DIR / sim_name
+                    if potential_config.exists():
+                        _, _, content = parse_ssh_config(potential_config)
+                        bcm_config = find_bcm_host_config(content)
+                        if bcm_config:
+                            config_path = potential_config
+            
+            if not config_path or not bcm_config:
+                print("✗ No matching SSH config file found for this simulation", file=sys.stderr)
+                print("  The --ssh-config option requires an existing SSH config file in .ssh/", file=sys.stderr)
+                return 1
+            
+            return 0 if update_ssh_config(config_path, nodes, bcm_config) > 0 else 1
+        
+        # Default mode: print VNC info
+        print_vnc_info(nodes, ssh_service_port, worker_hostname)
         
         return 0
         
