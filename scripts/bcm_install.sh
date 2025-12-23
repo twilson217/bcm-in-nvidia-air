@@ -501,6 +501,19 @@ fi
 # Step 10: Post-installation configuration
 echo "[Step 10/10] Post-installation configuration..."
 
+# Ensure ISO is mounted (Ansible may have unmounted it)
+if ! mountpoint -q "${BCM_MOUNT_PATH}"; then
+    echo "  Re-mounting ISO..."
+    mkdir -p "${BCM_MOUNT_PATH}"
+    if mount -o loop "${BCM_ISO_PATH}" "${BCM_MOUNT_PATH}" 2>/dev/null; then
+        echo "  ✓ ISO mounted at ${BCM_MOUNT_PATH}"
+    else
+        echo "  ⚠ Could not mount ISO, some post-install steps may be skipped"
+    fi
+else
+    echo "  ✓ ISO already mounted at ${BCM_MOUNT_PATH}"
+fi
+
 # Install BCM apt repositories from the ISO
 # These packages set up the BCM apt sources for future package installations
 # Package location: /mnt/dvd/data/packages/<VERSION>/ubuntu/2404/all/cm-config-apt*.deb
