@@ -23,6 +23,7 @@ What this does:
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 
@@ -64,6 +65,23 @@ def patch_text_file_remove_block(path: Path, block: str) -> bool:
         return False
     updated = content.replace(block, "")
     if updated == content:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def patch_dgx_stat_path_to_packages_gz(path: Path) -> bool:
+    """
+    Update any dgx-os stat path in an Ansible task file to require Packages.gz.
+
+    This is intentionally tolerant of quote style / jinja formatting differences across
+    collection versions. It only edits the provided file.
+    """
+    content = path.read_text(encoding="utf-8", errors="strict")
+    # Only add /Packages.gz if it's not already present
+    pattern = re.compile(r"(/data/packages/packagegroups/dgx-os)(?!/Packages\.gz)")
+    updated, n = pattern.subn(r"\1/Packages.gz", content)
+    if n == 0 or updated == content:
         return False
     path.write_text(updated, encoding="utf-8")
     return True
@@ -157,10 +175,8 @@ def main() -> int:
     # when the repo is actually usable by apt.
     bright_iso_mount = col_dir / "roles/bright_iso/tasks/mount.yml"
     if bright_iso_mount.exists():
-        old = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os' }}\""
-        new = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os/Packages.gz' }}\""
         try:
-            if patch_text_file_replace(bright_iso_mount, old, new):
+            if patch_dgx_stat_path_to_packages_gz(bright_iso_mount):
                 total_changes += 1
                 changed_files.append(bright_iso_mount)
                 print("✓ Tightened DGX ISO detection to require Packages.gz")
@@ -173,10 +189,8 @@ def main() -> int:
 
     head_node_setup_dgx = col_dir / "roles/head_node/tasks/setup_dgx.yml"
     if head_node_setup_dgx.exists():
-        old = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os' }}\""
-        new = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os/Packages.gz' }}\""
         try:
-            if patch_text_file_replace(head_node_setup_dgx, old, new):
+            if patch_dgx_stat_path_to_packages_gz(head_node_setup_dgx):
                 total_changes += 1
                 changed_files.append(head_node_setup_dgx)
                 print("✓ Tightened head_node DGX checks to require Packages.gz")
