@@ -14,6 +14,10 @@ What this does:
   - Removes upstream installer110's Ubuntu 24.04 behavior of excluding libglapi-mesa
     from software-image creation and (optionally) from distro package exclusions.
     We standardize on libglapi-mesa and exclude amber instead.
+
+  - Fixes DGX auto-detection so we only enable DGX repos when apt metadata exists.
+    Some ISOs may contain an empty dgx-os directory (or no Packages index), which
+    causes apt-get update inside cm-create-image to fail during repo validation.
 """
 
 from __future__ import annotations
@@ -142,6 +146,46 @@ def main() -> int:
             print(f"⚠ Failed to patch {os_ubuntu_2404_vars}: {e}")
     else:
         print("ℹ Could not find os_Ubuntu_24.04_vars.yml to patch (unexpected layout)")
+
+    # 4) DGX auto-detection: require apt metadata, not just directory presence
+    # The collection decides whether to enable DGX behavior based on a stat() check.
+    # If it incorrectly sets dgx=True, dvd-debian-repos.j2 adds a dgx-os repo that
+    # doesn't have an index (Packages/Packages.gz), and cm-create-image fails at:
+    #   E: Failed to fetch .../packagegroups/dgx-os/./Packages (No such file...)
+    #
+    # Change the stat path from the directory to Packages.gz so dgx is only enabled
+    # when the repo is actually usable by apt.
+    bright_iso_mount = col_dir / "roles/bright_iso/tasks/mount.yml"
+    if bright_iso_mount.exists():
+        old = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os' }}\""
+        new = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os/Packages.gz' }}\""
+        try:
+            if patch_text_file_replace(bright_iso_mount, old, new):
+                total_changes += 1
+                changed_files.append(bright_iso_mount)
+                print("✓ Tightened DGX ISO detection to require Packages.gz")
+            else:
+                print("✓ DGX ISO detection already uses Packages.gz (or pattern mismatch)")
+        except Exception as e:
+            print(f"⚠ Failed to patch {bright_iso_mount}: {e}")
+    else:
+        print("ℹ Could not find bright_iso/tasks/mount.yml to patch (unexpected layout)")
+
+    head_node_setup_dgx = col_dir / "roles/head_node/tasks/setup_dgx.yml"
+    if head_node_setup_dgx.exists():
+        old = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os' }}\""
+        new = "        path: \"{{ bright_iso_mount_path + '/data/packages/packagegroups/dgx-os/Packages.gz' }}\""
+        try:
+            if patch_text_file_replace(head_node_setup_dgx, old, new):
+                total_changes += 1
+                changed_files.append(head_node_setup_dgx)
+                print("✓ Tightened head_node DGX checks to require Packages.gz")
+            else:
+                print("✓ head_node DGX checks already use Packages.gz (or pattern mismatch)")
+        except Exception as e:
+            print(f"⚠ Failed to patch {head_node_setup_dgx}: {e}")
+    else:
+        print("ℹ Could not find head_node/tasks/setup_dgx.yml to patch (unexpected layout)")
 
     if total_changes == 0:
         print("✓ No changes needed")
