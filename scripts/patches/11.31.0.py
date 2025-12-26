@@ -10,6 +10,10 @@ Why:
 What this does:
   - Finds:  roles/head_node/files/buildmaster/selections/UBUNTU2404-*/extrapackages.xml
   - Replaces (idempotent):  slurm24.11  ->  slurm25.05
+
+  - Removes upstream installer110's Ubuntu 24.04 behavior of excluding libglapi-mesa
+    from software-image creation and (optionally) from distro package exclusions.
+    We standardize on libglapi-mesa and exclude amber instead.
 """
 
 from __future__ import annotations
@@ -31,6 +35,36 @@ def patch_file(path: Path) -> tuple[int, bool]:
     return count, True
 
 
+def patch_text_file_replace(path: Path, old: str, new: str) -> bool:
+    """
+    Replace exact substring old->new in a text file.
+    Returns True if a change was written.
+    """
+    content = path.read_text(encoding="utf-8", errors="strict")
+    if old not in content:
+        return False
+    updated = content.replace(old, new)
+    if updated == content:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def patch_text_file_remove_block(path: Path, block: str) -> bool:
+    """
+    Remove an exact block of text (including newlines) if present.
+    Returns True if a change was written.
+    """
+    content = path.read_text(encoding="utf-8", errors="strict")
+    if block not in content:
+        return False
+    updated = content.replace(block, "")
+    if updated == content:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--collection-dir", required=True, help="Installed Ansible collection directory")
@@ -41,35 +75,84 @@ def main() -> int:
         print(f"✗ Invalid --collection-dir: {col_dir}")
         return 2
 
-    # Scope: Ubuntu 24.04 selection XMLs (CM/DIST/etc.) that define extra packages.
+    total_changes = 0
+    changed_files: list[Path] = []
+
+    # 1) Slurm selection fix (Ubuntu 24.04 selection XMLs: CM/DIST/etc.)
     selection_glob = "roles/head_node/files/buildmaster/selections/UBUNTU2404-*/extrapackages.xml"
     files = sorted(col_dir.glob(selection_glob))
 
     if not files:
         print(f"ℹ No Ubuntu 24.04 selection files found at: {selection_glob}")
-        return 0
+    else:
+        total_replacements = 0
+        for f in files:
+            try:
+                count, changed = patch_file(f)
+                if count:
+                    total_replacements += count
+                if changed:
+                    total_changes += 1
+                    changed_files.append(f)
+            except Exception as e:
+                print(f"⚠ Failed to patch {f}: {e}")
 
-    total_replacements = 0
-    changed_files = []
+        if total_replacements > 0:
+            print(f"✓ Replaced slurm24.11 -> slurm25.05 ({total_replacements} occurrence(s))")
+        else:
+            print("✓ No slurm24.11 references found (already patched or not applicable)")
 
-    for f in files:
+    # 2) Remove installer110 Ubuntu 24.04 software-image exclusion of libglapi-mesa
+    # File: roles/head_node/tasks/post_install/software_images/main.yml
+    software_images_main = col_dir / "roles/head_node/tasks/post_install/software_images/main.yml"
+    if software_images_main.exists():
+        block = (
+            "- name: Set cm-create-image cli parameters (Non Airgapped) | Exclude libglapi-mesa package\n"
+            "  set_fact:\n"
+            "    exclude_software_images_distro_packages: \"{{ exclude_software_images_distro_packages + [ 'libglapi-mesa' ] }}\"\n"
+            "  when: ansible_distribution == \"Ubuntu\" and ansible_distribution_version == \"24.04\"\n"
+            "\n"
+        )
         try:
-            count, changed = patch_file(f)
-            if count:
-                total_replacements += count
-            if changed:
-                changed_files.append(f)
+            if patch_text_file_remove_block(software_images_main, block):
+                total_changes += 1
+                changed_files.append(software_images_main)
+                print("✓ Removed Ubuntu 24.04 libglapi-mesa exclusion from software-image creation")
+            else:
+                print("✓ Software-image libglapi-mesa exclusion already absent")
         except Exception as e:
-            print(f"⚠ Failed to patch {f}: {e}")
+            print(f"⚠ Failed to patch {software_images_main}: {e}")
+    else:
+        print("ℹ Could not find software_images/main.yml to patch (unexpected layout)")
 
-    if total_replacements == 0:
-        print("✓ No slurm24.11 references found (already patched or not applicable)")
+    # 3) Remove installer110 Ubuntu 24.04 distro exclusion of libglapi-mesa (if present)
+    # File: roles/head_node/vars/os_Ubuntu_24.04_vars.yml
+    os_ubuntu_2404_vars = col_dir / "roles/head_node/vars/os_Ubuntu_24.04_vars.yml"
+    if os_ubuntu_2404_vars.exists():
+        old = "    (['libglapi-mesa'] if not head_node_airgapped else [])"
+        new = "    ([])"  # keep structure, but never exclude libglapi-mesa
+        try:
+            if patch_text_file_replace(os_ubuntu_2404_vars, old, new):
+                total_changes += 1
+                changed_files.append(os_ubuntu_2404_vars)
+                print("✓ Removed Ubuntu 24.04 libglapi-mesa from distro exclusion list")
+            else:
+                print("✓ Distro exclusion of libglapi-mesa already absent or not matching expected pattern")
+        except Exception as e:
+            print(f"⚠ Failed to patch {os_ubuntu_2404_vars}: {e}")
+    else:
+        print("ℹ Could not find os_Ubuntu_24.04_vars.yml to patch (unexpected layout)")
+
+    if total_changes == 0:
+        print("✓ No changes needed")
         return 0
 
     # Keep output concise but actionable.
-    print(f"✓ Replaced slurm24.11 -> slurm25.05 ({total_replacements} occurrence(s))")
     for f in changed_files:
-        rel = f.relative_to(col_dir)
+        try:
+            rel = f.relative_to(col_dir)
+        except Exception:
+            rel = f
         print(f"  - patched: {rel}")
 
     return 0
