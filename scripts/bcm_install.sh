@@ -190,6 +190,45 @@ ansible-galaxy collection install community.mysql --force
 ansible-galaxy collection install community.crypto --force
 echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general, community.mysql, community.crypto"
 
+apply_collection_version_patch() {
+    local col_dir=""
+    local patch_file="/home/ubuntu/bcm_patches/${BCM_FULL_VERSION}.py"
+
+    # Collection can be installed under root or ubuntu, depending on how this script is executed.
+    local candidates=(
+        "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+    )
+
+    # No patch for this BCM full version -> nothing to do.
+    if [ ! -f "${patch_file}" ]; then
+        echo "  ℹ No collection patch for BCM ${BCM_FULL_VERSION}"
+        return 0
+    fi
+
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            col_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$col_dir" ]; then
+        echo "  ✗ ERROR: Patch exists (${patch_file}) but collection dir was not found for ${BCM_COLLECTION}"
+        return 1
+    fi
+
+    echo "  Applying collection patch: ${patch_file}"
+    python3 "${patch_file}" --collection-dir "${col_dir}" || {
+        echo "  ✗ ERROR: Collection patch failed: ${patch_file}"
+        return 1
+    }
+    echo "  ✓ Collection patch applied"
+}
+
+# Apply any per-version patches to the installed collection (if present)
+apply_collection_version_patch || exit 1
+
 #
 # BCM 10.x on Ubuntu 24.04:
 # The installer100 collection references both libglapi-amber and libglapi-mesa packages,

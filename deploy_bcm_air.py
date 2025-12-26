@@ -1861,6 +1861,44 @@ Host bcm
             print(f"\n✗ Script upload failed: {e}")
             return False
     
+    def upload_bcm_collection_patch(self, bcm_version, ssh_config_file):
+        """
+        Upload an optional per-BCM-version collection patch script to the head node.
+
+        If scripts/patches/<bcm_version>.py exists locally, upload it to:
+          /home/ubuntu/bcm_patches/<bcm_version>.py
+        """
+        patch_src = Path(__file__).parent / 'scripts' / 'patches' / f'{bcm_version}.py'
+        if not patch_src.exists():
+            print("  ℹ No BCM collection patch for this version")
+            return True
+
+        print(f"\n🩹 Uploading BCM collection patch: {patch_src.name}...")
+
+        remote_dir = "/home/ubuntu/bcm_patches"
+        ssh_mkdir = [
+            'ssh',
+            '-F', ssh_config_file,
+            '-o', 'StrictHostKeyChecking=no',
+            f'air-{self.bcm_node_name}',
+            f'mkdir -p {remote_dir}'
+        ]
+        scp_cmd = [
+            'scp',
+            '-F', ssh_config_file,
+            '-o', 'StrictHostKeyChecking=no',
+            str(patch_src),
+            f"air-{self.bcm_node_name}:{remote_dir}/{patch_src.name}",
+        ]
+        try:
+            subprocess.run(ssh_mkdir, check=True, capture_output=True)
+            subprocess.run(scp_cmd, check=True, capture_output=True, text=True)
+            print("  ✓ Patch uploaded")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"\n✗ Patch upload failed: {e}")
+            return False
+
     def execute_bcm_install(self, ssh_config_file):
         """
         Execute BCM installation script on the head node
@@ -1936,6 +1974,10 @@ Host bcm
         # Step 3: Upload install script (bcm-ansible-installer is cloned on remote host)
         if not self.upload_install_script(bcm_version, ssh_config_file):
             raise RuntimeError("Failed to upload installation script")
+
+        # Step 4: Upload optional per-version patch for the installed Ansible collection
+        if not self.upload_bcm_collection_patch(bcm_version, ssh_config_file):
+            raise RuntimeError("Failed to upload BCM collection patch")
         
         # Step 5: Execute installation
         if not self.execute_bcm_install(ssh_config_file):
