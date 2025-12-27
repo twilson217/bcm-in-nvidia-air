@@ -150,6 +150,34 @@ def patch_cluster_tools_disable_dgx_os_apt_repo() -> bool:
     return True
 
 
+def patch_cluster_tools_slurm_ubuntu2404() -> bool:
+    """
+    Patch cluster-tools' Ubuntu 24.04 CM extra packages selection to use slurm25.05.
+
+    Root cause (observed in cm-create-image log):
+      -- Package slurm24.11 not installed (NOT AVAILABLE)
+
+    The BCM 11.31.0 ISO *does* ship slurm25.05 packages (in packagegroups/hpc),
+    so switching the selection unblocks cm-create-image.
+    """
+    cfg = Path("/cm/local/apps/cluster-tools/config/UBUNTU2404-cm-extrapackages.xml")
+    if not cfg.exists():
+        print("ℹ cluster-tools UBUNTU2404-cm-extrapackages.xml not found (skipping Slurm patch)")
+        return False
+
+    content = cfg.read_text(encoding="utf-8", errors="strict")
+    if "slurm24.11" not in content:
+        print("✓ cluster-tools Ubuntu 24.04 slurm24.11 already absent")
+        return False
+
+    updated = content.replace("slurm24.11", "slurm25.05")
+    if updated == content:
+        return False
+    cfg.write_text(updated, encoding="utf-8")
+    print("✓ Patched cluster-tools Ubuntu 24.04 selection: slurm24.11 -> slurm25.05")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--collection-dir", required=True, help="Installed Ansible collection directory")
@@ -270,6 +298,13 @@ def main() -> int:
             total_changes += 1
     except Exception as e:
         print(f"⚠ Failed to patch cluster-tools APT repo template: {e}")
+
+    # 6) cluster-tools: Ubuntu 24.04 selection requests slurm24.11 (not available on ISO)
+    try:
+        if patch_cluster_tools_slurm_ubuntu2404():
+            total_changes += 1
+    except Exception as e:
+        print(f"⚠ Failed to patch cluster-tools Ubuntu 24.04 Slurm selection: {e}")
 
     if total_changes == 0:
         print("✓ No changes needed")
