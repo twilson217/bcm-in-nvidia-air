@@ -253,6 +253,75 @@ def patch_installer110_ignore_dps_cert_missing(col_dir: Path) -> bool:
     return True
 
 
+def patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir: Path) -> bool:
+    """
+    Patch installer110 create.yml to patch cluster-tools immediately before cm-create-image runs.
+
+    Why:
+      Our bcm_install.sh hook runs the version patch BEFORE ansible-playbook starts.
+      At that time, cluster-tools isn't installed yet, so direct patching of:
+        - /cm/local/apps/cluster-tools/.../dvdutils.py
+        - /cm/local/apps/cluster-tools/config/UBUNTU2404-cm-extrapackages.xml
+      is a no-op on fresh installs.
+
+      Adding these patches as an Ansible step right before cm-create-image ensures they
+      run after cluster-tools is present and fixes:
+        - dgx-os repo validation failure (missing packagegroups/dgx-os)
+        - slurm24.11 NOT AVAILABLE on Ubuntu 24.04 (use slurm25.05)
+    """
+    create_yml = col_dir / "roles/head_node/tasks/post_install/software_images/create.yml"
+    if not create_yml.exists():
+        print("ℹ installer110 software_images/create.yml not found (skipping cluster-tools pre-patch)")
+        return False
+
+    content = create_yml.read_text(encoding="utf-8", errors="strict")
+    if "invoke cm-create-image" not in content:
+        print("ℹ installer110 create.yml did not look like expected (skipping)")
+        return False
+
+    if "Patch cluster-tools for BCM 11.31.0" in content:
+        print("✓ installer110 create.yml already patches cluster-tools before cm-create-image")
+        return False
+
+    needle = "  - name: Create {{ image_name }} software image | invoke cm-create-image\n"
+    if needle not in content:
+        print("⚠ Could not find cm-create-image task anchor in create.yml (unexpected format)")
+        return False
+
+    inject = (
+        "  - name: Patch cluster-tools for BCM 11.31.0 (dgx-os repo + Slurm selection)\n"
+        "    ansible.builtin.shell:\n"
+        "      cmd: |\n"
+        "        set -euo pipefail\n"
+        "\n"
+        "        DVDUTILS=/cm/local/apps/cluster-tools/lib/python3.12/site-packages/cm_create_image/dvdutils.py\n"
+        "        if [ -f \"$DVDUTILS\" ]; then\n"
+        "          python3 - <<'PY'\n"
+        "from pathlib import Path\n"
+        "p = Path(\"/cm/local/apps/cluster-tools/lib/python3.12/site-packages/cm_create_image/dvdutils.py\")\n"
+        "txt = p.read_text(encoding=\"utf-8\", errors=\"strict\")\n"
+        "# Comment out dgx-os APT repo line if present and not already commented.\n"
+        "needle = \"deb [trusted=yes] file://{base_path}/data/packages/packagegroups/dgx-os ./\"\n"
+        "if needle in txt and (\"# \" + needle) not in txt:\n"
+        "    txt = txt.replace(needle, \"# \" + needle + \"  # disabled by bcm patch\")\n"
+        "    p.write_text(txt, encoding=\"utf-8\")\n"
+        "PY\n"
+        "        fi\n"
+        "\n"
+        "        CFG=/cm/local/apps/cluster-tools/config/UBUNTU2404-cm-extrapackages.xml\n"
+        "        if [ -f \"$CFG\" ]; then\n"
+        "          # Replace slurm24.11 -> slurm25.05 (idempotent)\n"
+        "          sed -i 's/slurm24\\.11/slurm25.05/g' \"$CFG\"\n"
+        "        fi\n"
+        "    changed_when: false\n"
+        "\n"
+    )
+
+    create_yml.write_text(content.replace(needle, inject + needle), encoding="utf-8")
+    print("✓ Patched installer110 create.yml to patch cluster-tools before cm-create-image")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--collection-dir", required=True, help="Installed Ansible collection directory")
@@ -374,6 +443,14 @@ def main() -> int:
             changed_files.append(col_dir / "roles/head_node/tasks/validate.yml")
     except Exception as e:
         print(f"⚠ Failed to patch installer110 certificate check: {e}")
+
+    # 4c) installer110: patch cluster-tools right before cm-create-image runs
+    try:
+        if patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir):
+            total_changes += 1
+            changed_files.append(col_dir / "roles/head_node/tasks/post_install/software_images/create.yml")
+    except Exception as e:
+        print(f"⚠ Failed to patch installer110 cm-create-image pre-step: {e}")
 
     # 5) cluster-tools: cm-create-image APT DVD repo template hardcodes dgx-os
     try:
