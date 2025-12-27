@@ -18,6 +18,11 @@ What this does:
   - Fixes DGX auto-detection so we only enable DGX repos when apt metadata exists.
     Some ISOs may contain an empty dgx-os directory (or no Packages index), which
     causes apt-get update inside cm-create-image to fail during repo validation.
+
+  - Fixes cm-create-image (cluster-tools) APT DVD repo template to not hardcode a
+    dgx-os repo line. On BCM 11.31.0 non-DGX ISOs, there is no
+    data/packages/packagegroups/dgx-os repo, so apt-get update fails during
+    cm-create-image repo validation if dgx-os is listed.
 """
 
 from __future__ import annotations
@@ -84,6 +89,64 @@ def patch_dgx_stat_path_to_packages_gz(path: Path) -> bool:
     if n == 0 or updated == content:
         return False
     path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def patch_cluster_tools_disable_dgx_os_apt_repo() -> bool:
+    """
+    Patch cluster-tools' cm-create-image APT DVD repo template to not include dgx-os.
+
+    Root cause:
+      cm-create-image mounts the ISO inside the image at:
+        /mnt/bright-installer-<random>
+      and uses a built-in APT repo template that always includes:
+        file://{base_path}/data/packages/packagegroups/dgx-os ./
+
+      For non-DGX ISOs (including BCM 11.31.0 standard ISO), dgx-os doesn't exist,
+      so apt-get update fails with:
+        File not found - .../packagegroups/dgx-os/./Packages
+    """
+    dvdutils = Path(
+        "/cm/local/apps/cluster-tools/lib/python3.12/site-packages/cm_create_image/dvdutils.py"
+    )
+    if not dvdutils.exists():
+        print("ℹ cluster-tools dvdutils.py not found (skipping dgx-os APT repo patch)")
+        return False
+
+    content = dvdutils.read_text(encoding="utf-8", errors="strict")
+    if "packagegroups/dgx-os" not in content:
+        print("✓ cluster-tools APT repo template already has no dgx-os repo")
+        return False
+
+    # Comment out the DGX-OS apt repo block (keep it readable + idempotent).
+    # This is tolerant to minor whitespace differences.
+    pattern = re.compile(
+        r"\n# DVD DGX-OS packages repository\n"
+        r"deb\s+\[trusted=yes\]\s+file://\{base_path\}/data/packages/packagegroups/dgx-os\s+\./\n",
+        re.MULTILINE,
+    )
+    updated, n = pattern.subn(
+        "\n# DVD DGX-OS packages repository (disabled by bcm patch)\n"
+        "# deb [trusted=yes] file://{base_path}/data/packages/packagegroups/dgx-os ./\n",
+        content,
+    )
+
+    if n == 0:
+        # Fallback: comment out ANY apt repo line referencing dgx-os inside this file.
+        pattern2 = re.compile(
+            r"^(deb\s+\[trusted=yes\]\s+file://\{base_path\}/data/packages/packagegroups/dgx-os\s+\./\s*)$",
+            re.MULTILINE,
+        )
+        updated, n2 = pattern2.subn(r"# \1  # disabled by bcm patch", content)
+        if n2 == 0 or updated == content:
+            print("⚠ Could not patch cluster-tools dgx-os APT repo line (unexpected format)")
+            return False
+
+    if updated == content:
+        return False
+
+    dvdutils.write_text(updated, encoding="utf-8")
+    print("✓ Disabled cluster-tools dgx-os APT repo line (prevents repo validation failure)")
     return True
 
 
@@ -200,6 +263,13 @@ def main() -> int:
             print(f"⚠ Failed to patch {head_node_setup_dgx}: {e}")
     else:
         print("ℹ Could not find head_node/tasks/setup_dgx.yml to patch (unexpected layout)")
+
+    # 5) cluster-tools: cm-create-image APT DVD repo template hardcodes dgx-os
+    try:
+        if patch_cluster_tools_disable_dgx_os_apt_repo():
+            total_changes += 1
+    except Exception as e:
+        print(f"⚠ Failed to patch cluster-tools APT repo template: {e}")
 
     if total_changes == 0:
         print("✓ No changes needed")
