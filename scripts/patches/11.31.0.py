@@ -181,6 +181,78 @@ def patch_cluster_tools_slurm_ubuntu2404() -> bool:
     return True
 
 
+def patch_installer110_ignore_dps_cert_missing(col_dir: Path) -> bool:
+    """
+    Patch installer110 head_node validate.yml so missing DPS cert isn't fatal.
+
+    In BCM 11.31.0 airgapped installs, `cm-check-certificates.sh` can return rc=96 with:
+      /cm/local/apps/dps/etc/dps.pem : not found
+
+    That appears to be non-fatal (DPS not installed/enabled), so allow rc=96.
+    """
+    validate_yml = col_dir / "roles/head_node/tasks/validate.yml"
+    if not validate_yml.exists():
+        print("ℹ installer110 validate.yml not found (skipping certificate check patch)")
+        return False
+
+    content = validate_yml.read_text(encoding="utf-8", errors="strict")
+    if "cm-check-certificates.sh" not in content:
+        print("✓ installer110 validate.yml has no certificate check (nothing to patch)")
+        return False
+
+    # If it's already patched, don't touch.
+    if "rc not in [0, 96]" in content or "cm_check_certificates" in content:
+        print("✓ installer110 certificate check already patched")
+        return False
+
+    # Replace the simple command task with a registered task + tolerant failed_when.
+    old_block = (
+        "---\n"
+        "- name: Check certificates\n"
+        "  ansible.builtin.command:\n"
+        "    cmd: /cm/local/apps/cmd/scripts/cm-check-certificates.sh\n"
+        "  changed_when: false\n"
+    )
+
+    new_block = (
+        "---\n"
+        "- name: Check certificates\n"
+        "  ansible.builtin.command:\n"
+        "    cmd: /cm/local/apps/cmd/scripts/cm-check-certificates.sh\n"
+        "  register: cm_check_certificates\n"
+        "  changed_when: false\n"
+        "  failed_when: cm_check_certificates.rc not in [0, 96]\n"
+    )
+
+    if old_block in content:
+        validate_yml.write_text(content.replace(old_block, new_block), encoding="utf-8")
+        print("✓ Patched installer110 certificate check to allow rc=96 (missing dps.pem)")
+        return True
+
+    # Fallback: try a looser patch if formatting differs.
+    # Insert register/failed_when after changed_when if we find the task.
+    pattern = re.compile(
+        r"(- name:\s*Check certificates\s*\n"
+        r"\s*ansible\.builtin\.command:\s*\n"
+        r"\s*cmd:\s*/cm/local/apps/cmd/scripts/cm-check-certificates\.sh\s*\n"
+        r"\s*changed_when:\s*false\s*\n)",
+        re.MULTILINE,
+    )
+    replacement = (
+        r"\1"
+        "  register: cm_check_certificates\n"
+        "  failed_when: cm_check_certificates.rc not in [0, 96]\n"
+    )
+    updated, n = pattern.subn(replacement, content)
+    if n == 0 or updated == content:
+        print("⚠ Could not patch installer110 certificate check (unexpected format)")
+        return False
+
+    validate_yml.write_text(updated, encoding="utf-8")
+    print("✓ Patched installer110 certificate check (regex) to allow rc=96")
+    return True
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--collection-dir", required=True, help="Installed Ansible collection directory")
@@ -294,6 +366,14 @@ def main() -> int:
             print(f"⚠ Failed to patch {head_node_setup_dgx}: {e}")
     else:
         print("ℹ Could not find head_node/tasks/setup_dgx.yml to patch (unexpected layout)")
+
+    # 4b) installer110: certificate validation can fail when optional DPS cert is missing
+    try:
+        if patch_installer110_ignore_dps_cert_missing(col_dir):
+            total_changes += 1
+            changed_files.append(col_dir / "roles/head_node/tasks/validate.yml")
+    except Exception as e:
+        print(f"⚠ Failed to patch installer110 certificate check: {e}")
 
     # 5) cluster-tools: cm-create-image APT DVD repo template hardcodes dgx-os
     try:
