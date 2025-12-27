@@ -117,6 +117,9 @@ def patch_cluster_tools_disable_dgx_os_apt_repo() -> bool:
     if "packagegroups/dgx-os" not in content:
         print("✓ cluster-tools APT repo template already has no dgx-os repo")
         return False
+    if "disabled by bcm patch" in content or "# deb [trusted=yes] file://{base_path}/data/packages/packagegroups/dgx-os" in content:
+        print("✓ cluster-tools dgx-os APT repo line already disabled")
+        return False
 
     # Comment out the DGX-OS apt repo block (keep it readable + idempotent).
     # This is tolerant to minor whitespace differences.
