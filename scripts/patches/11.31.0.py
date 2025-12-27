@@ -280,10 +280,10 @@ def patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir: Path)
         return False
 
     if "Patch cluster-tools for BCM 11.31.0" in content:
-        # We previously injected an invalid YAML block (python heredoc lines not indented),
-        # which causes Ansible to fail parsing this file. If we detect that signature,
-        # remove the bad block and replace with the fixed sed-based block below.
-        if "from pathlib import Path" not in content:
+        # If it's already correctly patched (bash executable set), we're done.
+        # Otherwise, we'll remove/rewrite the block below (covers older broken YAML
+        # injections and the /bin/sh pipefail issue).
+        if "executable: /bin/bash" in content and "from pathlib import Path" not in content:
             print("✓ installer110 create.yml already patches cluster-tools before cm-create-image")
             return False
 
@@ -310,6 +310,7 @@ def patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir: Path)
         "        if [ -f \"$CFG\" ]; then\n"
         "          sed -i 's/slurm24\\.11/slurm25.05/g' \"$CFG\"\n"
         "        fi\n"
+        "      executable: /bin/bash\n"
         "    changed_when: false\n"
         "\n"
     )
