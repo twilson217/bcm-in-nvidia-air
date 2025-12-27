@@ -280,15 +280,19 @@ def patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir: Path)
         return False
 
     if "Patch cluster-tools for BCM 11.31.0" in content:
-        print("✓ installer110 create.yml already patches cluster-tools before cm-create-image")
-        return False
+        # We previously injected an invalid YAML block (python heredoc lines not indented),
+        # which causes Ansible to fail parsing this file. If we detect that signature,
+        # remove the bad block and replace with the fixed sed-based block below.
+        if "from pathlib import Path" not in content:
+            print("✓ installer110 create.yml already patches cluster-tools before cm-create-image")
+            return False
 
     needle = "  - name: Create {{ image_name }} software image | invoke cm-create-image\n"
     if needle not in content:
         print("⚠ Could not find cm-create-image task anchor in create.yml (unexpected format)")
         return False
 
-    inject = (
+    fixed_block = (
         "  - name: Patch cluster-tools for BCM 11.31.0 (dgx-os repo + Slurm selection)\n"
         "    ansible.builtin.shell:\n"
         "      cmd: |\n"
@@ -296,28 +300,37 @@ def patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir: Path)
         "\n"
         "        DVDUTILS=/cm/local/apps/cluster-tools/lib/python3.12/site-packages/cm_create_image/dvdutils.py\n"
         "        if [ -f \"$DVDUTILS\" ]; then\n"
-        "          python3 - <<'PY'\n"
-        "from pathlib import Path\n"
-        "p = Path(\"/cm/local/apps/cluster-tools/lib/python3.12/site-packages/cm_create_image/dvdutils.py\")\n"
-        "txt = p.read_text(encoding=\"utf-8\", errors=\"strict\")\n"
-        "# Comment out dgx-os APT repo line if present and not already commented.\n"
-        "needle = \"deb [trusted=yes] file://{base_path}/data/packages/packagegroups/dgx-os ./\"\n"
-        "if needle in txt and (\"# \" + needle) not in txt:\n"
-        "    txt = txt.replace(needle, \"# \" + needle + \"  # disabled by bcm patch\")\n"
-        "    p.write_text(txt, encoding=\"utf-8\")\n"
-        "PY\n"
+        "          NEEDLE='deb [trusted=yes] file://{base_path}/data/packages/packagegroups/dgx-os ./'\n"
+        "          if grep -q \"$NEEDLE\" \"$DVDUTILS\" && ! grep -q \"# deb \\[trusted=yes\\] file://{base_path}/data/packages/packagegroups/dgx-os\" \"$DVDUTILS\"; then\n"
+        "            sed -i \"s|$NEEDLE|# $NEEDLE  # disabled by bcm patch|\" \"$DVDUTILS\"\n"
+        "          fi\n"
         "        fi\n"
         "\n"
         "        CFG=/cm/local/apps/cluster-tools/config/UBUNTU2404-cm-extrapackages.xml\n"
         "        if [ -f \"$CFG\" ]; then\n"
-        "          # Replace slurm24.11 -> slurm25.05 (idempotent)\n"
         "          sed -i 's/slurm24\\.11/slurm25.05/g' \"$CFG\"\n"
         "        fi\n"
         "    changed_when: false\n"
         "\n"
     )
 
-    create_yml.write_text(content.replace(needle, inject + needle), encoding="utf-8")
+    # If a previous broken block is present, remove it before re-inserting.
+    if "Patch cluster-tools for BCM 11.31.0" in content:
+        lines = content.splitlines(keepends=True)
+        out: list[str] = []
+        i = 0
+        while i < len(lines):
+            if lines[i].startswith("  - name: Patch cluster-tools for BCM 11.31.0"):
+                # Skip until the next task ("  - name: Create {{ image_name }} ...")
+                i += 1
+                while i < len(lines) and not lines[i].startswith(needle):
+                    i += 1
+                continue
+            out.append(lines[i])
+            i += 1
+        content = "".join(out)
+
+    create_yml.write_text(content.replace(needle, fixed_block + needle), encoding="utf-8")
     print("✓ Patched installer110 create.yml to patch cluster-tools before cm-create-image")
     return True
 
