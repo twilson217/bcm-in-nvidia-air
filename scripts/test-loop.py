@@ -129,6 +129,11 @@ def _read_progress_ssh_config(progress_path: Path) -> Optional[str]:
         return None
 
 
+def _safe_slug(s: str) -> str:
+    """Filesystem-safe-ish key for log filenames."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", s).strip("_")
+
+
 def _download_failure_logs(test_key: str, ssh_config: Optional[str], sim_name: Optional[str]) -> None:
     """
     Download logs from the failed simulation before it's deleted.
@@ -145,7 +150,7 @@ def _download_failure_logs(test_key: str, ssh_config: Optional[str], sim_name: O
     
     # Download ansible log
     remote_log = "/home/ubuntu/ansible_bcm_install.log"
-    local_log = LOG_DIR / f"ansible_bcm_install_{test_key}.log"
+    local_log = LOG_DIR / f"ansible_bcm_install_{_safe_slug(test_key)}.log"
     
     try:
         result = subprocess.run(
@@ -176,7 +181,7 @@ def _download_failure_logs(test_key: str, ssh_config: Optional[str], sim_name: O
             timeout=30,
         )
         if result.returncode == 0:
-            debug_log = LOG_DIR / f"bcm_debug_{test_key}.log"
+            debug_log = LOG_DIR / f"bcm_debug_{_safe_slug(test_key)}.log"
             debug_log.write_text(f"Remote state check for {test_key}:\n{result.stdout}\n", encoding="utf-8")
             _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} saved debug info to {debug_log.name}")
     except Exception:
@@ -306,21 +311,91 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tup
     return rc, sim_id, sim_name
 
 
-def _select_tests(all_tests: List[TestCase], args: argparse.Namespace) -> List[TestCase]:
-    selected_keys: List[str] = []
-    for i in range(1, 7):
-        if getattr(args, f"test{i}"):
-            selected_keys.append(f"test{i}")
-    if not selected_keys:
-        return all_tests
-    by_key = {t.key: t for t in all_tests}
-    return [by_key[k] for k in selected_keys if k in by_key]
+_ISO_VERSION_RE = re.compile(r"^bcm-(?P<version>\d+(?:\.\d+){0,2})-ubuntu2404\.iso$", re.IGNORECASE)
+
+
+def _version_sort_key(v: str) -> Tuple[int, ...]:
+    try:
+        return tuple(int(p) for p in v.split("."))
+    except Exception:
+        # Put weird versions at the end deterministically
+        return (9999, 9999, 9999)
+
+
+def _discover_iso_versions(iso_dir: Path) -> List[str]:
+    versions: List[str] = []
+    if not iso_dir.exists():
+        return versions
+    for f in sorted(iso_dir.glob("*.iso")):
+        m = _ISO_VERSION_RE.match(f.name)
+        if not m:
+            continue
+        versions.append(m.group("version"))
+    versions = sorted(set(versions), key=_version_sort_key)
+    return versions
+
+
+def _resolve_requested_versions(requested: List[str], available: List[str]) -> List[str]:
+    """
+    Resolve requested versions against available ISO versions.
+    Supports:
+      - exact version (e.g. 11.31.0)
+      - major version (e.g. 11) only if it matches exactly one available version
+    """
+    if not requested:
+        return available
+
+    resolved: List[str] = []
+    for r in requested:
+        r = r.strip()
+        if not r:
+            continue
+        if r in available:
+            resolved.append(r)
+            continue
+
+        # Major version shorthand (e.g. "11")
+        if "." not in r:
+            matches = [v for v in available if v.split(".")[0] == r]
+            if len(matches) == 1:
+                resolved.append(matches[0])
+                continue
+            if len(matches) > 1:
+                raise ValueError(f"Ambiguous --test {r}: matches {', '.join(matches)}; please specify full version")
+
+        raise ValueError(f"Unknown --test {r}: no matching ISO in .iso/ (available: {', '.join(available) or 'none'})")
+
+    # Preserve requested order, de-dup
+    seen = set()
+    out: List[str] = []
+    for v in resolved:
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run an overnight deployment matrix test loop.")
-    for i in range(1, 7):
-        parser.add_argument(f"--test{i}", action="store_true", help=f"Run only test{i}")
+    parser.add_argument(
+        "--test",
+        action="append",
+        default=[],
+        help=(
+            "BCM version to test (repeatable). Examples: --test 10.30.0 --test 11.31.0. "
+            "If omitted, all versions found in .iso/ are tested."
+        ),
+    )
+    parser.add_argument(
+        "--external",
+        action="store_true",
+        help="Run tests against air.nvidia.com only (unless --internal is also set).",
+    )
+    parser.add_argument(
+        "--internal",
+        action="store_true",
+        help="Run tests against air-inside.nvidia.com only (unless --external is also set).",
+    )
 
     parser.add_argument(
         "--env-external",
@@ -354,74 +429,57 @@ def main() -> int:
         print(f"✗ Missing internal env file: {env_internal}", file=sys.stderr)
         return 2
 
-    all_tests: List[TestCase] = [
-        TestCase(
-            key="test1",
-            name="BCM 10.25.03 on air.nvidia.com (.env.external)",
-            api_url="https://air.nvidia.com",
-            env_file=env_external,
-            bcm_version="10.25.03",
-        ),
-        TestCase(
-            key="test2",
-            name="BCM 10.30.0 on air.nvidia.com (.env.external)",
-            api_url="https://air.nvidia.com",
-            env_file=env_external,
-            bcm_version="10.30.0",
-        ),
-        TestCase(
-            key="test3",
-            name="BCM 11.0 on air.nvidia.com (.env.external)",
-            api_url="https://air.nvidia.com",
-            env_file=env_external,
-            bcm_version="11",  # Matches bcm-11.0-ubuntu2404.iso
-        ),
-        TestCase(
-            key="test4",
-            name="BCM 10.25.03 on air-inside.nvidia.com (.env.internal)",
-            api_url="https://air-inside.nvidia.com",
-            env_file=env_internal,
-            bcm_version="10.25.03",
-        ),
-        TestCase(
-            key="test5",
-            name="BCM 10.30.0 on air-inside.nvidia.com (.env.internal)",
-            api_url="https://air-inside.nvidia.com",
-            env_file=env_internal,
-            bcm_version="10.30.0",
-        ),
-        TestCase(
-            key="test6",
-            name="BCM 11.0 on air-inside.nvidia.com (.env.internal)",
-            api_url="https://air-inside.nvidia.com",
-            env_file=env_internal,
-            bcm_version="11",  # Matches bcm-11.0-ubuntu2404.iso
-        ),
-    ]
+    iso_dir = REPO_ROOT / ".iso"
+    available_versions = _discover_iso_versions(iso_dir)
+    if not available_versions:
+        print(f"✗ No ISO versions found in {iso_dir} (expected filenames like bcm-11.31.0-ubuntu2404.iso)", file=sys.stderr)
+        return 2
 
-    tests = _select_tests(all_tests, args)
+    try:
+        versions_to_test = _resolve_requested_versions(args.test, available_versions)
+    except ValueError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 2
+
+    # Target selection: default to both; if user supplies only one flag, restrict.
+    run_external = True
+    run_internal = True
+    if args.external and not args.internal:
+        run_internal = False
+    if args.internal and not args.external:
+        run_external = False
+
+    targets: List[Tuple[str, str, Path]] = []
+    if run_external:
+        targets.append(("external", "https://air.nvidia.com", env_external))
+    if run_internal:
+        targets.append(("internal", "https://air-inside.nvidia.com", env_internal))
+
+    tests: List[TestCase] = []
+    for v in versions_to_test:
+        # Requirement: for each ISO/version, run air.nvidia.com first, then air-inside.
+        for target_name, api_url, env_file in targets:
+            key = f"{target_name}-{v}"
+            tests.append(
+                TestCase(
+                    key=key,
+                    name=f"BCM {v} on {api_url} ({env_file.name})",
+                    api_url=api_url,
+                    env_file=env_file,
+                    bcm_version=v,
+                )
+            )
+
     _ensure_log_dir()
 
     # Preflight check: warn about ISO availability
-    iso_dir = REPO_ROOT / ".iso"
-    if iso_dir.exists():
-        iso_names = [f.name.lower() for f in iso_dir.glob("*.iso")]
-        print(f"\nPreflight: found {len(iso_names)} ISO(s) in .iso/")
-        for t in tests:
-            major = t.bcm_version.split(".")[0]
-            # Prefer matching the requested version string if it includes a dot (e.g., 10.30.0)
-            needle = t.bcm_version.lower()
-            matching: List[str]
-            if "." in needle:
-                matching = [n for n in iso_names if needle.replace(".", "") in n.replace(".", "") or needle in n]
-            else:
-                matching = [n for n in iso_names if f"bcm-{major}" in n or f"bcm{major}" in n]
-            if not matching:
-                print(f"  ⚠ WARNING: {t.key} requests BCM {t.bcm_version} but no BCM {major} ISO found!")
-            else:
-                print(f"  ✓ {t.key}: BCM {t.bcm_version} → likely matches {matching[0]}")
-    else:
-        print(f"\n⚠ WARNING: .iso/ directory not found - all tests will fail!")
+    iso_names = [f.name for f in sorted(iso_dir.glob("*.iso"))]
+    print(f"\nPreflight: found {len(iso_names)} ISO(s) in .iso/")
+    for n in iso_names:
+        print(f"  - {n}")
+    print(f"\nPreflight: will run {len(tests)} test(s):")
+    for t in tests:
+        print(f"  - {t.key}: {t.name}")
 
     loop_start_time = time.time()
     _append_line(SUMMARY_LOG, f"[{_now()}] Test loop starting: {', '.join(t.key for t in tests)} (dry_run={args.dry_run})")
@@ -455,27 +513,40 @@ def main() -> int:
         )
 
         if not args.dry_run:
-            # If test failed, download logs BEFORE deleting the simulation
+            # If test failed, download logs BEFORE any cleanup.
             if not ok:
                 ssh_config = _read_progress_ssh_config(PROGRESS_JSON)
                 _download_failure_logs(test.key, ssh_config, sim_name)
-            
-            # Always attempt cleanup after a run (success or failure).
-            if sim_id:
-                try:
-                    username = extra_env.get("AIR_USERNAME") or os.getenv("AIR_USERNAME") or ""
-                    api_token = extra_env.get("AIR_API_TOKEN") or os.getenv("AIR_API_TOKEN") or ""
-                    if not username or not api_token:
-                        raise RuntimeError("Missing AIR_USERNAME or AIR_API_TOKEN in env; cannot delete simulation")
-                    jwt = _air_login_jwt(test.api_url, username=username, api_token=api_token)
-                    deleted, msg = _air_delete_simulation(test.api_url, jwt_token=jwt, simulation_id=sim_id)
-                    _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} cleanup sim_id={sim_id}: {msg}")
-                    if not deleted:
-                        _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} WARNING: cleanup failed; you may need to delete manually")
-                except Exception as e:
-                    _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} WARNING: cleanup exception: {e}")
+
+            # If stop-on-fail is enabled, keep the failed simulation for investigation.
+            if (not ok) and args.stop_on_fail:
+                if sim_id:
+                    _append_line(
+                        SUMMARY_LOG,
+                        f"[{_now()}] {test.key} cleanup skipped (stop-on-fail enabled; keeping sim_id={sim_id})",
+                    )
+                else:
+                    _append_line(
+                        SUMMARY_LOG,
+                        f"[{_now()}] {test.key} cleanup skipped (stop-on-fail enabled; no simulation_id in {PROGRESS_JSON})",
+                    )
             else:
-                _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} cleanup skipped (no simulation_id in {PROGRESS_JSON})")
+                # Default: cleanup after a run (success or failure).
+                if sim_id:
+                    try:
+                        username = extra_env.get("AIR_USERNAME") or os.getenv("AIR_USERNAME") or ""
+                        api_token = extra_env.get("AIR_API_TOKEN") or os.getenv("AIR_API_TOKEN") or ""
+                        if not username or not api_token:
+                            raise RuntimeError("Missing AIR_USERNAME or AIR_API_TOKEN in env; cannot delete simulation")
+                        jwt = _air_login_jwt(test.api_url, username=username, api_token=api_token)
+                        deleted, msg = _air_delete_simulation(test.api_url, jwt_token=jwt, simulation_id=sim_id)
+                        _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} cleanup sim_id={sim_id}: {msg}")
+                        if not deleted:
+                            _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} WARNING: cleanup failed; you may need to delete manually")
+                    except Exception as e:
+                        _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} WARNING: cleanup exception: {e}")
+                else:
+                    _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} cleanup skipped (no simulation_id in {PROGRESS_JSON})")
 
         if not ok:
             overall_failures += 1
