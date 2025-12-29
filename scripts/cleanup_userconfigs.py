@@ -7,11 +7,14 @@ Lists all UserConfigs and optionally deletes duplicates/old test configs.
 Usage:
     ./scripts/cleanup_userconfigs.py           # List all configs
     ./scripts/cleanup_userconfigs.py --delete  # Delete duplicates (keeps 'bcm-cloudinit-password')
+    ./scripts/cleanup_userconfigs.py --delete-id <id>   # Delete a specific UserConfig by ID
+    ./scripts/cleanup_userconfigs.py --delete-all       # Delete all UserConfigs
 """
 
 import os
 import sys
 import argparse
+import hashlib
 from pathlib import Path
 from collections import defaultdict
 
@@ -36,8 +39,44 @@ if not API_TOKEN or not USERNAME:
 def main():
     parser = argparse.ArgumentParser(description="Clean up UserConfigs")
     parser.add_argument("--delete", action="store_true", help="Delete duplicates and test configs")
+    parser.add_argument(
+        "--delete-id",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Delete a specific UserConfig by ID (repeatable)",
+    )
+    parser.add_argument(
+        "--delete-all",
+        action="store_true",
+        help="Delete ALL UserConfigs (overrides --delete/--keep)",
+    )
+    parser.add_argument(
+        "--show-id",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Show a specific UserConfig by ID (repeatable). Prints metadata; use --print-content to include content.",
+    )
+    parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Show all UserConfigs (metadata + hashes; use --print-content to include content)",
+    )
+    parser.add_argument(
+        "--print-content",
+        action="store_true",
+        help="When used with --show-id/--show-all, also print full UserConfig content",
+    )
     parser.add_argument("--keep", default="bcm-cloudinit-password", help="Name of config to keep (default: bcm-cloudinit-password)")
     args = parser.parse_args()
+
+    if args.delete_all and args.delete_id:
+        print("ERROR: --delete-all and --delete-id cannot be used together")
+        sys.exit(2)
+    if args.show_all and args.show_id:
+        print("ERROR: --show-all and --show-id cannot be used together")
+        sys.exit(2)
     
     # Login
     print(f"Authenticating to {API_URL}...")
@@ -70,6 +109,102 @@ def main():
     
     if not all_configs:
         print("No configs to clean up!")
+        return
+
+    def _sha256(text: str) -> str:
+        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def _fetch_userconfig(cfg_id: str) -> dict | None:
+        r = requests.get(f"{API_URL}/api/v2/userconfigs/{cfg_id}/", headers=headers)
+        if r.status_code == 200:
+            return r.json()
+        print(f"  ✗ Failed to fetch UserConfig {cfg_id}: {r.status_code}")
+        return None
+
+    # Show modes
+    if args.show_all or args.show_id:
+        wanted_ids = None
+        if args.show_all:
+            wanted_ids = [c.get("id") for c in all_configs if c.get("id")]
+        else:
+            wanted_ids = [s.strip() for s in args.show_id if s and s.strip()]
+
+        print("=" * 60)
+        print("UserConfigs (server read-back)")
+        print("=" * 60)
+
+        for cfg_id in wanted_ids:
+            cfg = _fetch_userconfig(cfg_id)
+            if not cfg:
+                continue
+            name = cfg.get("name")
+            kind = cfg.get("kind")
+            org = cfg.get("organization")
+            created = cfg.get("created")
+            modified = cfg.get("modified")
+            content = cfg.get("content") or ""
+            print(f"\n- ID: {cfg_id}")
+            print(f"  Name: {name}")
+            print(f"  Kind: {kind}")
+            print(f"  Organization: {org}")
+            print(f"  Created: {created}")
+            print(f"  Modified: {modified}")
+            print(f"  Content length: {len(content)}")
+            print(f"  Content sha256: {_sha256(content)}")
+            if args.print_content:
+                print("\n  --- content (begin) ---")
+                # Print exactly as stored
+                print(content.rstrip("\n"))
+                print("  --- content (end) ---")
+
+        return
+
+    # Explicit deletion modes (by ID / delete all)
+    if args.delete_all or args.delete_id:
+        if args.delete_all:
+            to_delete = list(all_configs)
+        else:
+            wanted = [s.strip() for s in args.delete_id if s and s.strip()]
+            wanted_set = set(wanted)
+            by_id = {c.get("id"): c for c in all_configs if c.get("id")}
+            to_delete = [by_id[i] for i in wanted if i in by_id]
+            missing = [i for i in wanted if i not in by_id]
+
+        if not to_delete and not (args.delete_id and wanted):
+            # Shouldn't happen, but keep behavior predictable.
+            print("Nothing to delete!")
+            return
+
+        print("=" * 60)
+        if args.delete_all:
+            print(f"Deleting ALL UserConfigs: {len(to_delete)}")
+        else:
+            print(f"Deleting UserConfigs by ID: {len(to_delete)}")
+        print("=" * 60)
+
+        if args.delete_id and missing:
+            print("\nIDs not found in your current UserConfigs (nothing deleted for these):")
+            for mid in missing:
+                print(f"  - {mid}")
+
+        deleted = 0
+        failed = 0
+        for cfg in to_delete:
+            cfg_id = cfg.get("id")
+            cfg_name = cfg.get("name") or "<unknown-name>"
+            if not cfg_id:
+                failed += 1
+                print(f"  ✗ Skipping (missing id): {cfg_name}")
+                continue
+            resp = requests.delete(f"{API_URL}/api/v2/userconfigs/{cfg_id}/", headers=headers)
+            if resp.status_code in (200, 204):
+                deleted += 1
+                print(f"  ✓ Deleted: {cfg_name} ({cfg_id})")
+            else:
+                failed += 1
+                print(f"  ✗ Failed: {cfg_name} ({cfg_id}) ({resp.status_code})")
+
+        print(f"\nDone! Deleted: {deleted}, Failed: {failed}")
         return
     
     # Group by name

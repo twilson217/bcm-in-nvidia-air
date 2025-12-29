@@ -97,6 +97,13 @@ class ProgressTracker:
     def get(self, key, default=None):
         """Get a stored value"""
         return self.data.get(key, default)
+
+    def set(self, **kwargs):
+        """Store arbitrary metadata without advancing the last_step."""
+        for key, value in kwargs.items():
+            self.data[key] = value
+        self.data['last_updated'] = datetime.now().isoformat()
+        self._save()
     
     def clear(self):
         """Clear all progress"""
@@ -126,7 +133,10 @@ class AirBCMDeployer:
     """Automate BCM deployment on NVIDIA Air"""
     
     def __init__(self, api_base_url="https://air.nvidia.com", api_token=None, username=None, 
-                 non_interactive=False, progress_tracker=None):
+                 non_interactive=False, progress_tracker=None,
+                 skip_cloud_init: bool = False,
+                 skip_ssh_service: bool = False,
+                 no_sdk: bool = False):
         """
         Initialize the deployer
         
@@ -139,6 +149,10 @@ class AirBCMDeployer:
         """
         self.non_interactive = non_interactive
         self.progress = progress_tracker or ProgressTracker()
+        # Isolation/debug toggles (defaults keep current behavior)
+        self.skip_cloud_init = skip_cloud_init
+        self.skip_ssh_service = skip_ssh_service
+        self.no_sdk = no_sdk
         # Clean up URL - remove trailing slashes and /api/vX
         self.api_base_url = api_base_url.rstrip('/')
         if self.api_base_url.endswith('/api/v2'):
@@ -951,6 +965,8 @@ class AirBCMDeployer:
         
         # Use Air SDK for reliable node listing (same method that works for cloud-init)
         try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
             from air_sdk import AirApi
             air = AirApi(api_url=self.api_base_url, bearer_token=self.jwt_token)
             sim = air.simulations.get(self.simulation_id)
@@ -981,8 +997,12 @@ class AirBCMDeployer:
                 if not use_sdk:
                     # Fallback to REST API
                     response = requests.get(
-                        f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/",
+                        # NOTE: On https://air.nvidia.com, the OpenAPI spec defines node listing as:
+                        #   GET /api/v2/simulations/nodes/?simulation=<simulation_uuid>
+                        # not /api/v2/simulations/<id>/nodes/
+                        f"{self.api_base_url}/api/v2/simulations/nodes/",
                         headers=self.headers,
+                        params={"simulation": self.simulation_id},
                         timeout=30
                     )
                     
@@ -1098,6 +1118,7 @@ class AirBCMDeployer:
         """
         print("\nWaiting for simulation to finish loading...")
         start_time = time.time()
+        last_sim_data = None
         
         while time.time() - start_time < timeout:
             try:
@@ -1109,6 +1130,7 @@ class AirBCMDeployer:
                 
                 if response.status_code == 200:
                     sim_data = response.json()
+                    last_sim_data = sim_data
                     state = sim_data.get('state', 'unknown')
                     print(f"  Simulation state: {state}                    ", end='\r')
                     
@@ -1117,6 +1139,10 @@ class AirBCMDeployer:
                         return True
                     elif state in ['ERROR', 'FAILED']:
                         print(f"\n✗ Simulation failed to load: {state}")
+                        self._dump_simulation_failure_diagnostics(
+                            reason=f"simulation state={state} during load wait",
+                            sim_data=sim_data,
+                        )
                         return False
                 
                 time.sleep(5)
@@ -1125,7 +1151,214 @@ class AirBCMDeployer:
                 time.sleep(5)
         
         print(f"\n⚠ Timeout waiting for simulation to load")
+        self._dump_simulation_failure_diagnostics(
+            reason=f"timeout waiting for LOADED (timeout={timeout}s)",
+            sim_data=last_sim_data,
+        )
         return False
+
+    def _dump_simulation_failure_diagnostics(self, reason: str, sim_data: dict | None = None) -> None:
+        """
+        Best-effort diagnostics dump when a simulation fails to load.
+        Writes a single JSON file into .logs/ with details that often contain the root cause.
+        """
+        try:
+            sim_id = self.simulation_id
+            if not sim_id:
+                return
+
+            log_dir = getattr(self.progress, "log_dir", Path(__file__).parent / ".logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            out_path = log_dir / f"air-sim-failure-{sim_id}-{ts}.json"
+
+            def _get_json(url: str, params: dict | None = None) -> dict:
+                resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+                ct = (resp.headers.get("content-type") or "").lower()
+                if resp.status_code == 200 and "application/json" in ct:
+                    return {"ok": True, "status_code": resp.status_code, "json": resp.json(), "headers": dict(resp.headers)}
+                return {
+                    "ok": False,
+                    "status_code": resp.status_code,
+                    "headers": dict(resp.headers),
+                    "text": (resp.text or "")[:4000],
+                }
+
+            base = self.api_base_url.rstrip("/")
+            diag: dict = {
+                "timestamp": datetime.now().isoformat(),
+                "reason": reason,
+                "api_base_url": base,
+                "simulation_id": sim_id,
+                "simulation_name": getattr(self, "simulation_name", None),
+                "sim_data_from_wait_loop": sim_data,
+                "endpoints": {},
+                "sdk": {"available": False},
+            }
+
+            # SDK (when installed) can expose additional objects/fields and clearer errors than raw REST.
+            # https://docs.nvidia.com/networking-ethernet-software/nvidia-air/Air-Python-SDK/
+            try:
+                if getattr(self, "no_sdk", False):
+                    raise RuntimeError("SDK disabled by --no-sdk")
+                from air_sdk import AirApi  # type: ignore
+
+                air = AirApi(username=self.username, password=self.api_token, api_url=base)
+                diag["sdk"]["available"] = True
+
+                def _sdk_safe(obj, max_len: int = 20000):
+                    try:
+                        if obj is None:
+                            return None
+                        if hasattr(obj, "json") and callable(getattr(obj, "json")):
+                            return obj.json()
+                        # Fall back to repr (truncated)
+                        s = repr(obj)
+                        return s if len(s) <= max_len else s[:max_len] + "..."
+                    except Exception as e:
+                        return {"error": str(e)}
+
+                # Simulation (often includes fields not present in our v2 REST response)
+                try:
+                    sim_obj = air.simulations.get(sim_id)
+                    diag["sdk"]["simulation"] = _sdk_safe(sim_obj)
+                except Exception as e:
+                    diag["sdk"]["simulation_error"] = str(e)
+
+                # Jobs (useful for “capacity/scheduling” failures; filter by simulation when supported)
+                try:
+                    jobs_api = getattr(air, "jobs", None)
+                    if jobs_api and hasattr(jobs_api, "list"):
+                        diag["sdk"]["jobs"] = _sdk_safe(jobs_api.list(simulation=sim_id))
+                except Exception as e:
+                    diag["sdk"]["jobs_error"] = str(e)
+
+                # Simulation nodes (often includes per-node state/error)
+                try:
+                    sim_nodes_api = getattr(air, "simulation_nodes", None)
+                    if sim_nodes_api and hasattr(sim_nodes_api, "list"):
+                        diag["sdk"]["simulation_nodes"] = _sdk_safe(sim_nodes_api.list(simulation=sim_id))
+                except Exception as e:
+                    diag["sdk"]["simulation_nodes_error"] = str(e)
+
+                # Capacity (if available, can immediately explain “can’t place this sim right now”)
+                try:
+                    capacity_api = getattr(air, "capacity", None)
+                    if capacity_api and hasattr(capacity_api, "get"):
+                        diag["sdk"]["capacity"] = _sdk_safe(capacity_api.get())
+                except Exception as e:
+                    diag["sdk"]["capacity_error"] = str(e)
+            except Exception as e:
+                diag["sdk"]["available"] = False
+                diag["sdk"]["import_error"] = str(e)
+
+            # v2 sim details (often contains state_message/error_message)
+            diag["endpoints"]["simulation"] = _get_json(f"{base}/api/v2/simulations/{sim_id}/")
+            # nodes (node-level error_message is very helpful)
+            # NOTE: external air.nvidia.com does not expose /api/v2/simulations/{id}/nodes/
+            # The OpenAPI spec defines /api/v2/simulations/nodes/?simulation=<id>
+            diag["endpoints"]["nodes"] = _get_json(
+                f"{base}/api/v2/simulations/nodes/",
+                params={"simulation": sim_id},
+            )
+            # jobs + events (usually show the failing operation/reason)
+            # NOTE: OpenAPI spec defines /api/v2/jobs/?simulation=<id>
+            diag["endpoints"]["jobs"] = _get_json(
+                f"{base}/api/v2/jobs/",
+                params={"simulation": sim_id},
+            )
+            # v1 job endpoints often include additional fields (e.g., "notes") that can contain failure reasons.
+            # /api/v2/jobs/{id}/ returns JobShort for non-worker clients (no error details).
+            try:
+                jobs_json = diag["endpoints"]["jobs"].get("json") if isinstance(diag["endpoints"]["jobs"], dict) else None
+                v2_job_results = []
+                if isinstance(jobs_json, dict) and isinstance(jobs_json.get("results"), list):
+                    v2_job_results = jobs_json["results"]
+                failed_job_ids = [
+                    j.get("id")
+                    for j in v2_job_results
+                    if isinstance(j, dict) and j.get("state") == "FAILED"
+                ]
+                # Prioritize START failures
+                failed_job_ids = (
+                    [j.get("id") for j in v2_job_results if isinstance(j, dict) and j.get("state") == "FAILED" and j.get("category") == "START"]
+                    + [jid for jid in failed_job_ids if jid]
+                )
+                # De-dupe while preserving order
+                seen = set()
+                failed_job_ids = [jid for jid in failed_job_ids if jid and not (jid in seen or seen.add(jid))]
+
+                diag["endpoints"]["jobs_v1_failed_details"] = {}
+                for jid in failed_job_ids[:5]:
+                    diag["endpoints"]["jobs_v1_failed_details"][jid] = _get_json(f"{base}/api/v1/job/{jid}/")
+                # If v1 job includes a worker URL, fetch that too (often has availability/health clues).
+                worker_urls = []
+                for job_detail in diag["endpoints"]["jobs_v1_failed_details"].values():
+                    if not isinstance(job_detail, dict):
+                        continue
+                    j = job_detail.get("json")
+                    if isinstance(j, dict) and isinstance(j.get("worker"), str) and j["worker"]:
+                        worker_urls.append(j["worker"])
+                # De-dupe while preserving order
+                seen_w = set()
+                worker_urls = [u for u in worker_urls if not (u in seen_w or seen_w.add(u))]
+                diag["endpoints"]["workers_v1"] = {}
+                for wurl in worker_urls[:3]:
+                    diag["endpoints"]["workers_v1"][wurl] = _get_json(wurl)
+            except Exception as e:
+                diag["endpoints"]["jobs_v1_failed_details_error"] = str(e)
+
+            # v1 simulation often has additional fields compared to v2 (sometimes including worker assignment).
+            diag["endpoints"]["simulation_v1"] = _get_json(f"{base}/api/v1/simulation/{sim_id}/")
+            # NOTE: "events" endpoint is not present in the provided OpenAPI spec for this API host.
+            # Keep a placeholder so the diagnostics format is stable; callers can inspect other sources.
+            diag["endpoints"]["events"] = {"ok": False, "status_code": None, "text": "No /api/v2/*events* endpoint found in .docs/NVIDIA Air API.yaml"}
+            # services (v2 list is under simulations/nodes/interfaces/services/?simulation=<id>
+            diag["endpoints"]["services_v2"] = _get_json(
+                f"{base}/api/v2/simulations/nodes/interfaces/services/",
+                params={"simulation": sim_id},
+            )
+            # services (v1 has useful src_port info; filter to this simulation)
+            diag["endpoints"]["services_v1"] = _get_json(f"{base}/api/v1/service/", params={"simulation": sim_id})
+
+            out_path.write_text(json.dumps(diag, indent=2, default=str))
+            print(f"\n  ℹ Wrote Air failure diagnostics: {out_path}")
+            print(f"  ℹ Tip: you can also run: python scripts/air-tests/get_sim_info.py --sim-id {sim_id}")
+        except Exception as e:
+            # Never fail the deploy because diagnostics failed
+            print(f"\n  Warning: failed to write Air diagnostics: {e}")
+
+    def delete_simulation(self) -> bool:
+        """Best-effort delete of the current simulation."""
+        sim_id = getattr(self, "simulation_id", None)
+        if not sim_id:
+            return False
+        try:
+            resp = requests.delete(
+                f"{self.api_base_url}/api/v2/simulations/{sim_id}/",
+                headers=self.headers,
+                timeout=60,
+            )
+            return resp.status_code in (200, 202, 204)
+        except Exception:
+            return False
+
+
+def _command_exists(cmd: str) -> bool:
+    try:
+        return subprocess.run(["which", cmd], capture_output=True).returncode == 0
+    except Exception:
+        return False
+
+
+def _strip_flag_args(argv: list[str], flags: set[str]) -> list[str]:
+    """Remove any occurrences of the provided flags (boolean flags only)."""
+    out: list[str] = []
+    for a in argv:
+        if a in flags:
+            continue
+        out.append(a)
+    return out
     
     def enable_ssh_service(self):
         """
@@ -1143,8 +1376,14 @@ class AirBCMDeployer:
         
         print("\nEnabling SSH service for simulation...")
         print(f"  Creating SSH service on {self.bcm_node_name}:{interface}...")
+
+        if getattr(self, "skip_ssh_service", False):
+            print("  ℹ Skipping SSH service creation (--skip-ssh-service)")
+            return None
         
         try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
             from air_sdk import AirApi
             
             # Connect to Air SDK
@@ -1332,6 +1571,10 @@ class AirBCMDeployer:
             True if successful, False otherwise
         """
         print("\nAssigning cloud-init to simulation nodes...")
+
+        if getattr(self, "skip_cloud_init", False):
+            print("  ℹ Skipping cloud-init assignment (--skip-cloud-init)")
+            return False
         
         # Check if we have a UserConfig to assign
         userdata_id = getattr(self, 'userconfig_id', None)
@@ -1342,9 +1585,14 @@ class AirBCMDeployer:
         print(f"  Using UserConfig: {userdata_id}")
         
         try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
             from air_sdk import AirApi
         except ImportError:
             print("  ⚠ air_sdk not installed. Install with: pip install air-sdk")
+            return False
+        except Exception as e:
+            print(f"  ⚠ {e}")
             return False
         
         try:
@@ -2284,6 +2532,21 @@ Examples:
         action='store_true',
         help='Clear saved progress and start fresh'
     )
+    parser.add_argument(
+        '--skip-cloud-init',
+        action='store_true',
+        help='Skip applying cloud-init UserConfig to nodes (isolation/debug)'
+    )
+    parser.add_argument(
+        '--skip-ssh-service',
+        action='store_true',
+        help='Skip creating the SSH service (isolation/debug)'
+    )
+    parser.add_argument(
+        '--no-sdk',
+        action='store_true',
+        help='Do not use air-sdk even if installed; use REST-only (isolation/debug)'
+    )
     
     args = parser.parse_args()
     
@@ -2333,7 +2596,10 @@ Examples:
                 api_token=args.api_token,
                 username=None,  # Will load from env
                 non_interactive=args.non_interactive,
-                progress_tracker=progress
+                progress_tracker=progress,
+                skip_cloud_init=args.skip_cloud_init,
+                skip_ssh_service=args.skip_ssh_service,
+                no_sdk=args.no_sdk,
             )
         except Exception as e:
             # Authentication errors are already printed with troubleshooting info
@@ -2472,6 +2738,43 @@ Examples:
         else:
             if not deployer.wait_for_simulation_loaded(timeout=300):
                 print("\n✗ Error: Simulation did not load in time")
+
+                # Auto-fallback: if cloud-init was used and sim fails to load, retry once with --skip-cloud-init
+                # (requires sshpass or expect for the SSH/password bootstrap path).
+                if (not args.skip_cloud_init) and cloudinit_success:
+                    have_expect = _command_exists("expect")
+                    have_sshpass = _command_exists("sshpass")
+
+                    if not (have_expect or have_sshpass):
+                        print("\nSimulation failed to load with cloud-init.")
+                        print('Please run "sudo apt update && sudo apt install expect" and then try again with "./deploy_bcm_air.py --skip-cloud-init".')
+                        print("Tip: sshpass also works (sudo apt install sshpass).")
+                        return 1
+
+                    print("\nSimulation failed to load with cloud-init; falling back to SSH/expect method.")
+                    print("Deleting simulation and restarting from the beginning with --skip-cloud-init...")
+
+                    # Delete current sim (best-effort)
+                    deleted = deployer.delete_simulation()
+                    if deleted:
+                        print("  ✓ Simulation deleted")
+                    else:
+                        print("  ⚠ Simulation delete failed (continuing anyway)")
+
+                    # Clear progress so we truly restart from the beginning
+                    progress.clear()
+
+                    # Re-run this script with the same args, forcing skip-cloud-init
+                    rerun_args = _strip_flag_args(sys.argv[1:], {"--resume"})
+                    if "--skip-cloud-init" not in rerun_args:
+                        rerun_args.append("--skip-cloud-init")
+                    if "--clear-progress" not in rerun_args:
+                        rerun_args.append("--clear-progress")
+
+                    print(f"\n[auto-fallback] Re-running: {sys.executable} {Path(__file__).name} {' '.join(rerun_args)}")
+                    rc = subprocess.run([sys.executable, str(Path(__file__).resolve()), *rerun_args]).returncode
+                    return rc
+
                 return 1
             progress.complete_step('simulation_loaded')
         
@@ -2521,8 +2824,10 @@ Examples:
             if not deployer.configure_node_passwords(ssh_info):
                 print("\n  ℹ Continuing with default password 'nvidia'")
                 print("  ℹ You can change it manually after connecting")
+            progress.set(bootstrap_method="ssh-expect")
         else:
             print("\n✓ Passwords configured via cloud-init (set at boot time)")
+            progress.set(bootstrap_method="cloud-init")
         
         # Step: Install BCM
         if not args.skip_ansible:

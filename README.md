@@ -140,7 +140,17 @@ The script auto-detects ISO files based on filename patterns. Supported formats:
 - Use `--bcm-version 10.25.03` or `--bcm-version 10.30.0` to select the specific release
 - In non-interactive mode (`-y`), you must specify the exact version if multiple ISOs exist
 
-8. **(Optional)** Verify your setup:
+8. **(Possibly Needed)** Install `expect`:
+```bash
+sudo apt update
+sudo apt install expect
+```
+
+**Note:** Sometimes there are issues using cloud-init to change the default passwords, copy the SSH key, etc. If an error is encountered creating or applying the cloud-init configuration, `deploy_bcm_air.py` will automatically fall back to using `expect` to complete these tasks via SSH.
+
+In some cases, you may not see an error at the cloud-init step, and instead the simulation may go into an **ERROR** state when it tries to load. If you see this, please try again with `./deploy_bcm_air.py --skip-cloud-init` to go directly to the SSH/expect setup method.
+
+9. **(Optional)** Verify your setup:
 ```bash
 python scripts/check_setup.py
 ```
