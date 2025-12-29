@@ -405,6 +405,156 @@ for p in files:
 PY
 }
 
+patch_collection_add_retries_for_license_url() {
+    local license_url="http://licensing.brightcomputing.com/licensing/index.cgi"
+    local col_dir=""
+
+    local candidates=(
+        "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+    )
+
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            col_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$col_dir" ]; then
+        echo "  ⚠ Could not locate installed Ansible collection directory for ${BCM_COLLECTION}"
+        return 0
+    fi
+
+    echo "  Patching licensing URI task to add retries/delay (transient network tolerance)..."
+    export LICENSE_URL="${license_url}"
+    export COL_DIR="${col_dir}"
+
+    python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+license_url = os.environ.get("LICENSE_URL", "")
+col_dir = Path(os.environ.get("COL_DIR", ""))
+
+if not license_url or not col_dir.exists():
+    print("  ⚠ Invalid patch parameters for licensing retry patch")
+    raise SystemExit(0)
+
+task_name_re = re.compile(r'^(\s*)-\s+name\s*:\s*.*$')
+register_re = re.compile(r'^\s*register\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*$')
+
+def patch_file(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+
+    if license_url not in text:
+        return False
+
+    lines = text.splitlines(True)
+    changed = False
+
+    # Find all occurrences and patch their containing task blocks.
+    idxs = [i for i, ln in enumerate(lines) if license_url in ln]
+    patched_task_starts = set()
+
+    for hit_i in idxs:
+        # Find the task start (nearest preceding "- name:" line).
+        start = None
+        start_indent = None
+        for j in range(hit_i, -1, -1):
+            m = task_name_re.match(lines[j])
+            if m:
+                start = j
+                start_indent = len(m.group(1))
+                break
+        if start is None:
+            continue
+        if start in patched_task_starts:
+            continue
+
+        # Find the task end (next "- name:" at same indentation).
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            m = task_name_re.match(lines[j])
+            if m and len(m.group(1)) == start_indent:
+                end = j
+                break
+
+        block = lines[start:end]
+        block_text = "".join(block)
+
+        # If this task already has retries/until/delay, skip (idempotent).
+        if re.search(r'^\s*retries\s*:\s*\d+\s*$', block_text, re.MULTILINE) and re.search(
+            r'^\s*until\s*:\s*', block_text, re.MULTILINE
+        ):
+            patched_task_starts.add(start)
+            continue
+
+        # Determine indentation for task attributes (align with other keys under the task).
+        attr_indent = " " * (start_indent + 2)
+
+        # Determine a register var for this task.
+        reg_var = None
+        for ln in block:
+            m = register_re.match(ln)
+            if m:
+                reg_var = m.group(1)
+                break
+        if not reg_var:
+            reg_var = "bcm_license_request"
+
+        # Build insert lines (only insert missing ones).
+        insert = []
+        if not re.search(r'^\s*register\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}register: {reg_var}\n")
+        if not re.search(r'^\s*retries\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}retries: 12\n")
+        if not re.search(r'^\s*delay\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}delay: 10\n")
+        if not re.search(r'^\s*until\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}until: {reg_var}.status == 200\n")
+
+        if insert:
+            # Insert at end of task block, right before the next task starts.
+            lines[end:end] = insert + (["\n"] if (end < len(lines) and not lines[end - 1].endswith("\n\n")) else [])
+            changed = True
+
+        patched_task_starts.add(start)
+
+    if changed:
+        try:
+            path.write_text("".join(lines), encoding="utf-8")
+        except Exception:
+            return False
+
+    return changed
+
+
+files_changed = 0
+files_scanned = 0
+
+for yml in col_dir.rglob("*.yml"):
+    files_scanned += 1
+    if patch_file(yml):
+        files_changed += 1
+
+for yml in col_dir.rglob("*.yaml"):
+    files_scanned += 1
+    if patch_file(yml):
+        files_changed += 1
+
+if files_changed:
+    print(f"  ✓ Added retries/delay/until to licensing URI task in {files_changed} file(s)")
+else:
+    # Best-effort: not all installers hit licensing, or the URL may differ by version.
+    print(f"  ℹ No licensing URL task found to patch under {col_dir} (scanned {files_scanned} YAML files)")
+PY
+}
+
 # BCM 10.x on Ubuntu 24.04: The installer100 collection references both libglapi-amber
 # and libglapi-mesa which conflict. We standardize on libglapi-mesa, so we remove
 # amber package references from the collection's package lists.
@@ -414,6 +564,11 @@ if [ "$BCM_VERSION" == "10" ]; then
     patch_collection_remove_pkg "libgl1-amber-dri"
 else
     echo "  Skipping libglapi collection patch for BCM ${BCM_VERSION} (installer110)"
+fi
+
+# BCM 10.x: tolerate transient DNS/network hiccups during licensing HTTP request
+if [ "$BCM_VERSION" == "10" ]; then
+    patch_collection_add_retries_for_license_url
 fi
 
 # Workaround for observed crashes during certificate generation (rc=-11 / SIGSEGV)
