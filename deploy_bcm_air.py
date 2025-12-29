@@ -2768,8 +2768,9 @@ Examples:
                     rerun_args = _strip_flag_args(sys.argv[1:], {"--resume"})
                     if "--skip-cloud-init" not in rerun_args:
                         rerun_args.append("--skip-cloud-init")
-                    if "--clear-progress" not in rerun_args:
-                        rerun_args.append("--clear-progress")
+                    # IMPORTANT: do NOT pass --clear-progress here. That flag is designed to
+                    # clear progress and exit cleanly. We already called progress.clear()
+                    # above, so the rerun will start fresh automatically.
 
                     print(f"\n[auto-fallback] Re-running: {sys.executable} {Path(__file__).name} {' '.join(rerun_args)}")
                     rc = subprocess.run([sys.executable, str(Path(__file__).resolve()), *rerun_args]).returncode
