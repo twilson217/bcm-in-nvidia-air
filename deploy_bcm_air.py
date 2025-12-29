@@ -1343,23 +1343,6 @@ class AirBCMDeployer:
         except Exception:
             return False
 
-
-def _command_exists(cmd: str) -> bool:
-    try:
-        return subprocess.run(["which", cmd], capture_output=True).returncode == 0
-    except Exception:
-        return False
-
-
-def _strip_flag_args(argv: list[str], flags: set[str]) -> list[str]:
-    """Remove any occurrences of the provided flags (boolean flags only)."""
-    out: list[str] = []
-    for a in argv:
-        if a in flags:
-            continue
-        out.append(a)
-    return out
-    
     def enable_ssh_service(self):
         """
         Enable SSH service for the simulation using the Air SDK.
@@ -2447,6 +2430,23 @@ Host bcm
         except subprocess.CalledProcessError as e:
             print(f"    ✗ Error running cm-wlm-setup: {e}")
             return False
+
+
+def _command_exists(cmd: str) -> bool:
+    try:
+        return subprocess.run(["which", cmd], capture_output=True).returncode == 0
+    except Exception:
+        return False
+
+
+def _strip_flag_args(argv: list[str], flags: set[str]) -> list[str]:
+    """Remove any occurrences of the provided flags (boolean flags only)."""
+    out: list[str] = []
+    for a in argv:
+        if a in flags:
+            continue
+        out.append(a)
+    return out
 
 
 def main():
