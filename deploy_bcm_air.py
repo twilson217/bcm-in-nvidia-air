@@ -1673,11 +1673,23 @@ class AirBCMDeployer:
             ssh_pubkey = Path(self.ssh_public_key).expanduser().read_text().strip()
             print(f"  SSH public key: {self.ssh_public_key}")
         
+        desired_hostname = getattr(self, "bcm_node_name", "bcm-01")
+
         # Create a shell script to run on the remote host
+        # NOTE: This is fed via stdin to "bash -s" (no SCP) to avoid brittle scp/expect flows.
         setup_script_content = f'''#!/bin/bash
 set -e
 
 echo "Configuring BCM head node..."
+
+# Set hostname (cloud-init usually does this; SSH bootstrap needs to be explicit)
+sudo hostnamectl set-hostname "{desired_hostname}"
+if grep -qE "^127\\.0\\.1\\.1\\s+" /etc/hosts; then
+  sudo sed -i -E "s/^127\\.0\\.1\\.1\\s+.*/127.0.1.1 {desired_hostname}/" /etc/hosts
+else
+  echo "127.0.1.1 {desired_hostname}" | sudo tee -a /etc/hosts >/dev/null
+fi
+echo "  ✓ Hostname set to {desired_hostname}"
 
 # Change ubuntu password
 echo "ubuntu:{self.default_password}" | sudo chpasswd
@@ -1691,20 +1703,24 @@ echo "  ✓ Root password changed"
 sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 echo "  ✓ Root SSH login enabled"
 
-# Add SSH key for ubuntu user
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-echo '{ssh_pubkey}' >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
-echo "  ✓ Ubuntu SSH key added"
+if [ -n "{ssh_pubkey or ''}" ]; then
+  # Add SSH key for ubuntu user
+  mkdir -p ~/.ssh
+  chmod 700 ~/.ssh
+  echo '{ssh_pubkey or ''}' >> ~/.ssh/authorized_keys
+  chmod 600 ~/.ssh/authorized_keys
+  sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
+  echo "  ✓ Ubuntu SSH key added"
 
-# Add SSH key for root user
-sudo mkdir -p /root/.ssh
-sudo chmod 700 /root/.ssh
-echo '{ssh_pubkey}' | sudo tee -a /root/.ssh/authorized_keys > /dev/null
-sudo chmod 600 /root/.ssh/authorized_keys
-echo "  ✓ Root SSH key added"
+  # Add SSH key for root user
+  sudo mkdir -p /root/.ssh
+  sudo chmod 700 /root/.ssh
+  echo '{ssh_pubkey or ''}' | sudo tee -a /root/.ssh/authorized_keys > /dev/null
+  sudo chmod 600 /root/.ssh/authorized_keys
+  echo "  ✓ Root SSH key added"
+else
+  echo "  ⚠ No SSH public key provided; skipping key setup"
+fi
 
 # Restart SSH and wait
 sudo systemctl restart ssh
@@ -1723,39 +1739,65 @@ echo "SETUP_COMPLETE"
         default_pass = "nvidia"
         
         try:
+            # Wait for the SSH service to actually accept connections.
+            # We see occasional "Connection refused" even though the service exists in the API.
+            print("\n  Waiting for SSH service to accept connections...")
+            common_opts = [
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                '-o', 'ConnectTimeout=5',
+                '-o', 'ConnectionAttempts=1',
+            ]
+            ready = False
+            for attempt in range(1, 31):  # ~60-90s depending on sleep
+                sshpass_probe = subprocess.run(['which', 'sshpass'], capture_output=True).returncode == 0
+                if sshpass_probe:
+                    probe_cmd = ['sshpass', '-p', default_pass, 'ssh'] + common_opts + [
+                        '-p', str(port),
+                        f'ubuntu@{host}',
+                        'echo PROBE_OK'
+                    ]
+                    pr = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
+                    if pr.returncode == 0 and "PROBE_OK" in (pr.stdout or ""):
+                        ready = True
+                        break
+                else:
+                    # Try a raw TCP connect check (best-effort) using bash builtin.
+                    pr = subprocess.run(
+                        ["bash", "-lc", f"timeout 3 bash -lc '</dev/tcp/{host}/{port}'"],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if pr.returncode == 0:
+                        ready = True
+                        break
+                if attempt % 5 == 0:
+                    print(f"  (still waiting... attempt {attempt}/30)")
+                time.sleep(3)
+            if not ready:
+                print("  ⚠ SSH service did not become ready in time (continuing anyway)")
+
             # Check if sshpass is available (preferred method)
             sshpass_available = subprocess.run(['which', 'sshpass'], capture_output=True).returncode == 0
+            try_expect_fallback = False
             
             if sshpass_available:
                 print("\n  Using sshpass for password authentication...")
-                
-                # Common options (StrictHostKeyChecking, etc.)
-                common_opts = [
-                    '-o', 'StrictHostKeyChecking=no',
-                    '-o', 'UserKnownHostsFile=/dev/null',
-                ]
-                
-                # Upload the setup script using scp
-                # Note: scp uses -P (uppercase) for port, ssh uses -p (lowercase)
-                print("  Uploading setup script...")
-                scp_cmd = ['sshpass', '-p', default_pass, 'scp'] + common_opts + [
-                    '-P', str(port),  # scp uses uppercase -P for port
-                    str(setup_script_file),
-                    f'ubuntu@{host}:/tmp/setup_node.sh'
-                ]
-                result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode != 0:
-                    print(f"  ⚠ SCP failed: {result.stderr}")
-                    raise Exception("SCP upload failed")
-                
-                # Execute the setup script
-                print("  Executing setup script...")
+
+                # Execute the setup script via stdin (avoids SCP and is more reliable)
+                print("  Executing setup script (via ssh stdin)...")
                 ssh_cmd = ['sshpass', '-p', default_pass, 'ssh'] + common_opts + [
-                    '-p', str(port),  # ssh uses lowercase -p for port
+                    '-p', str(port),
                     f'ubuntu@{host}',
-                    'bash /tmp/setup_node.sh'
+                    'bash -s'
                 ]
-                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+                result = subprocess.run(
+                    ssh_cmd,
+                    input=setup_script_content,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
                 
                 # Show output
                 if result.stdout:
@@ -1763,53 +1805,116 @@ echo "SETUP_COMPLETE"
                         if line.strip():
                             print(f"  {line}")
                 
-                if 'SETUP_COMPLETE' in result.stdout:
+                if 'SETUP_COMPLETE' in (result.stdout or ""):
                     print("\n  ✓ Node configuration complete")
                     return True
                 else:
                     print(f"\n  ⚠ Setup may not have completed fully")
                     if result.stderr:
                         print(f"    stderr: {result.stderr[:200]}")
-                    return False
-            else:
-                # Fallback to expect
-                print("\n  sshpass not found, using expect fallback...")
-                print("  (Install sshpass for better reliability: sudo apt install sshpass)")
-                
-                # Create expect script
-                expect_script = f'''#!/usr/bin/expect -f
-set timeout 120
-spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P {port} /tmp/air_node_setup.sh ubuntu@{host}:/tmp/setup_node.sh
-expect "password:" {{ send "nvidia\\r" }}
-expect eof
+                    # If the image requires an interactive password-change flow, sshpass won't handle it.
+                    # Fall back to expect which does.
+                    combined = (result.stdout or "") + "\n" + (result.stderr or "")
+                    if any(s in combined.lower() for s in ["current password", "new password", "password expired", "must change", "you are required to change"]):
+                        print("  ℹ Detected a forced password-change prompt; falling back to expect...")
+                        try_expect_fallback = True
+                    else:
+                        print("  ℹ No forced password-change prompt detected (or not observable via sshpass).")
+                    if not try_expect_fallback:
+                        return False
 
-spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {port} ubuntu@{host} "bash /tmp/setup_node.sh"
-expect "password:" {{ send "nvidia\\r" }}
-expect "SETUP_COMPLETE"
-expect eof
-puts "\\n✓ BCM head node configured successfully"
+            if (not sshpass_available) or try_expect_fallback:
+                # Fallback to expect
+                print("\n  Using expect fallback (handles forced password-change prompts)...")
+                if not _command_exists("expect"):
+                    print("  ⚠ Required tool not found: expect")
+                    print("  ⚠ Install sshpass or expect: sudo apt install sshpass expect")
+                    return False
+
+                import base64
+                setup_script_b64 = base64.b64encode(setup_script_content.encode("utf-8")).decode("ascii")
+
+                # Create expect script.
+                # This mode handles the "forced password change on first login" flow
+                # and runs our setup script by decoding base64 remotely (no scp).
+                expect_script = f'''#!/usr/bin/expect -f
+set timeout 180
+set host "{host}"
+set port "{port}"
+set oldpw "nvidia"
+set newpw "{self.default_password}"
+set saw_pwchange 0
+
+proc handle_pwchange {{}} {{
+    upvar saw_pwchange saw_pwchange
+    # Common forced-change prompts differ slightly across images.
+    expect {{
+        -re "(?i)current.*password" {{
+            set saw_pwchange 1
+            puts "\\nℹ Detected forced password-change prompt (current password)"
+            send "$oldpw\\r"
+            exp_continue
+        }}
+        -re "(?i)enter new.*password|(?i)new.*password" {{
+            set saw_pwchange 1
+            puts "\\nℹ Detected forced password-change prompt (new password)"
+            send "$newpw\\r"
+            exp_continue
+        }}
+        -re "(?i)retype new.*password|(?i)repeat new.*password" {{
+            set saw_pwchange 1
+            puts "\\nℹ Detected forced password-change prompt (retype new password)"
+            send "$newpw\\r"
+            exp_continue
+        }}
+        -re "\\$ $" {{ return }}
+        -re "# $" {{ return }}
+        timeout {{ return }}
+    }}
+}}
+
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $port ubuntu@$host "bash -s"
+expect {{
+    -re "(?i)are you sure you want to continue connecting" {{ send "yes\\r"; exp_continue }}
+    -re "(?i)password:" {{ send "$oldpw\\r"; handle_pwchange }}
+    timeout {{ puts "\\n✗ Timed out waiting for password prompt"; exit 2 }}
+}}
+
+if {{$saw_pwchange == 0}} {{
+    puts "\\nℹ No forced password-change prompt detected (logged in directly)"
+}}
+
+# Now run the setup script by decoding base64 on the remote side.
+send -- "echo {setup_script_b64} | base64 -d | bash\\r"
+
+expect {{
+    -re "SETUP_COMPLETE" {{ puts "\\n✓ BCM head node configured successfully"; exit 0 }}
+    timeout {{ puts "\\n✗ Timed out waiting for SETUP_COMPLETE"; exit 3 }}
+}}
 '''
                 expect_file = Path('/tmp/air_password_config.exp')
                 expect_file.write_text(expect_script)
                 expect_file.chmod(0o700)
-                
+
                 result = subprocess.run(
                     ['expect', str(expect_file)],
                     capture_output=True,
                     text=True,
-                    timeout=180
+                    timeout=240
                 )
-                
+
                 if result.stdout:
                     for line in result.stdout.strip().split('\n'):
                         if line.strip() and not line.startswith('spawn'):
                             print(f"  {line}")
-                
-                if result.returncode == 0 or 'SETUP_COMPLETE' in result.stdout:
+
+                if result.returncode == 0 or 'SETUP_COMPLETE' in (result.stdout or ""):
                     print("\n  ✓ Node configuration complete")
                     return True
                 else:
                     print(f"\n  ⚠ Configuration may have issues")
+                    if result.stderr:
+                        print(f"    stderr: {result.stderr[:200]}")
                     return False
                     
         except FileNotFoundError as e:
