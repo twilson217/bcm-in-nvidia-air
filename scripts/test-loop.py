@@ -260,6 +260,7 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tup
         sys.executable,
         str(REPO_ROOT / "deploy_bcm_air.py"),
         "-y",
+        "--keep-progress",
         "--bcm-version",
         test.bcm_version,
         "--api-url",

@@ -2660,6 +2660,11 @@ Examples:
         help='Accept defaults for all prompts (BCM 10, Nvidia1234!, auto-generated name)'
     )
     parser.add_argument(
+        '--keep-progress',
+        action='store_true',
+        help='Do not auto-clear .logs/progress.json on successful completion (useful for test-loop logging).'
+    )
+    parser.add_argument(
         '--resume',
         action='store_true',
         help='Resume from last checkpoint (uses .logs/progress.json)'
@@ -3013,9 +3018,12 @@ Examples:
         print("deployment starts fresh? (Recommended)")
         
         if args.non_interactive:
-            print("  [non-interactive] Clearing progress file")
-            progress.clear()
-            print("  ✓ Progress file cleared")
+            if args.keep_progress:
+                print("  [non-interactive] Keeping progress file (--keep-progress)")
+            else:
+                print("  [non-interactive] Clearing progress file")
+                progress.clear()
+                print("  ✓ Progress file cleared")
         else:
             print("\nClear progress file? [Y/n]: ", end="")
             response = input().strip().lower()
