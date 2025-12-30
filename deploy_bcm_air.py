@@ -1983,13 +1983,51 @@ expect {{
             return None
         
         print("\nCreating SSH configuration...")
-        
-        # Create .ssh directory in project
-        project_ssh_dir = Path(__file__).parent / '.ssh'
-        project_ssh_dir.mkdir(mode=0o700, exist_ok=True)
-        
-        # Use simulation name for config file
-        config_filename = simulation_name.replace(' ', '-')
+        sim_name_slug = simulation_name.replace(' ', '-')
+
+        # Allow overriding the SSH config output path via env var so different env files
+        # (.env, .env.external, .env.internal) can write to different locations/names.
+        #
+        # Examples:
+        #   AIR_SSH_CONFIG_FILE=~/.ssh/air-external.conf
+        #   AIR_SSH_CONFIG_FILE=~/.ssh/air/{simulation_name_slug}.conf
+        #   AIR_SSH_CONFIG_FILE=./.ssh/internal/{simulation_id}
+        #
+        # If a directory is provided, we will write <dir>/<simulation_name_slug>.
+        ssh_config_override = os.getenv("AIR_SSH_CONFIG_FILE") or os.getenv("BCM_SSH_CONFIG_FILE")
+
+        config_file: Path
+        if ssh_config_override:
+            raw = os.path.expanduser(ssh_config_override.strip())
+            if not raw:
+                print("  ⚠ AIR_SSH_CONFIG_FILE is set but empty; falling back to default ./.ssh/<simulation>")
+                ssh_config_override = None
+            else:
+                fmt = {
+                    "simulation_name": simulation_name,
+                    "simulation_name_slug": sim_name_slug,
+                    "simulation_id": self.simulation_id or "",
+                }
+                try:
+                    resolved = raw.format_map(fmt) if "{" in raw else raw
+                except Exception as e:
+                    print(f"  ⚠ Could not format AIR_SSH_CONFIG_FILE='{ssh_config_override}': {e}")
+                    print("  ⚠ Falling back to default ./.ssh/<simulation>")
+                    resolved = ""
+                    ssh_config_override = None
+
+                if ssh_config_override:
+                    p = Path(resolved)
+                    # If the override is (or looks like) a directory, append default filename.
+                    if str(resolved).endswith(os.sep) or (p.exists() and p.is_dir()):
+                        p = p / sim_name_slug
+                    config_file = p
+
+        if not ssh_config_override:
+            # Default: create .ssh directory in project and use simulation name for config filename
+            project_ssh_dir = Path(__file__).parent / '.ssh'
+            project_ssh_dir.mkdir(mode=0o700, exist_ok=True)
+            config_file = project_ssh_dir / sim_name_slug
         
         # Create config content - direct connection to BCM head node
         config_content = f"""# NVIDIA Air Simulation SSH Configuration
@@ -2021,7 +2059,7 @@ Host bcm
 """
         
         # Write config file
-        config_file = project_ssh_dir / config_filename
+        config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(config_content)
         config_file.chmod(0o600)
         
