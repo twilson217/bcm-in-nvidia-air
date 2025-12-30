@@ -26,6 +26,26 @@ except ImportError:
 # Load environment variables from .env file
 load_dotenv()
 
+def _local_namespace() -> str | None:
+    """
+    Optional namespace for local, on-disk artifacts (logs, progress, default ssh configs).
+    Intended for separating artifacts across different .env files (e.g. external vs internal).
+    """
+    ns = (os.getenv("LOCAL_NAMESPACE") or "").strip()
+    return ns or None
+
+
+def _local_log_dir() -> Path:
+    base = Path(__file__).parent / ".logs"
+    ns = _local_namespace()
+    return (base / ns) if ns else base
+
+
+def _local_ssh_dir() -> Path:
+    base = Path(__file__).parent / ".ssh"
+    ns = _local_namespace()
+    return (base / ns) if ns else base
+
 
 class ProgressTracker:
     """Track deployment progress for resume functionality"""
@@ -48,7 +68,7 @@ class ProgressTracker:
     ]
     
     def __init__(self, log_dir=None):
-        self.log_dir = Path(log_dir) if log_dir else Path(__file__).parent / '.logs'
+        self.log_dir = Path(log_dir) if log_dir else _local_log_dir()
         self.progress_file = self.log_dir / 'progress.json'
         self.data = self._load()
     
@@ -1167,7 +1187,8 @@ class AirBCMDeployer:
             if not sim_id:
                 return
 
-            log_dir = getattr(self.progress, "log_dir", Path(__file__).parent / ".logs")
+            # Prefer progress-tracker log_dir, but ensure it's namespaced if LOCAL_NAMESPACE is set.
+            log_dir = getattr(self.progress, "log_dir", None) or _local_log_dir()
             log_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d-%H%M%S")
             out_path = log_dir / f"air-sim-failure-{sim_id}-{ts}.json"
@@ -1736,8 +1757,11 @@ echo "  ✓ SSH service restarted"
 echo "SETUP_COMPLETE"
 '''
         
-        # Write setup script to temp file
-        setup_script_file = Path('/tmp/air_node_setup.sh')
+        # Write setup script to a unique temp file (avoid collisions across concurrent runs)
+        import tempfile
+        ns = _local_namespace() or "default"
+        with tempfile.NamedTemporaryFile(prefix=f"air_node_setup_{ns}_", suffix=".sh", delete=False) as tf:
+            setup_script_file = Path(tf.name)
         setup_script_file.write_text(setup_script_content)
         setup_script_file.chmod(0o755)
         
@@ -1913,7 +1937,8 @@ expect {{
     timeout {{ puts "\\n✗ Timed out waiting for SETUP_COMPLETE"; exit 3 }}
 }}
 '''
-                expect_file = Path('/tmp/air_password_config.exp')
+                with tempfile.NamedTemporaryFile(prefix=f"air_password_config_{ns}_", suffix=".exp", delete=False) as tf:
+                    expect_file = Path(tf.name)
                 expect_file.write_text(expect_script)
                 expect_file.chmod(0o700)
 
@@ -1967,7 +1992,10 @@ expect {{
         finally:
             # Clean up temp files
             setup_script_file.unlink(missing_ok=True)
-            Path('/tmp/air_password_config.exp').unlink(missing_ok=True)
+            try:
+                expect_file.unlink(missing_ok=True)  # type: ignore[name-defined]
+            except Exception:
+                pass
     
     def create_ssh_config(self, ssh_info, simulation_name):
         """
@@ -2025,7 +2053,7 @@ expect {{
 
         if not ssh_config_override:
             # Default: create .ssh directory in project and use simulation name for config filename
-            project_ssh_dir = Path(__file__).parent / '.ssh'
+            project_ssh_dir = _local_ssh_dir()
             project_ssh_dir.mkdir(mode=0o700, exist_ok=True)
             config_file = project_ssh_dir / sim_name_slug
         

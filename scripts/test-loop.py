@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = REPO_ROOT / ".logs"
 DEPLOY_LOG = LOG_DIR / "deploy_bcm_air.log"
 SUMMARY_LOG = LOG_DIR / "test-summary.log"
-PROGRESS_JSON = LOG_DIR / "progress.json"
+PROGRESS_JSON = LOG_DIR / "progress.json"  # legacy/default (no LOCAL_NAMESPACE)
 
 # rsync --info=progress2 emits frequent carriage-return progress updates that become
 # newline-separated when captured via pipes. We want full progress on the console,
@@ -72,6 +72,18 @@ def _append_line(path: Path, line: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(line.rstrip("\n") + "\n")
+
+
+def _progress_path_for_env(extra_env: Dict[str, str]) -> Path:
+    """
+    deploy_bcm_air.py can write progress.json under a namespaced dir:
+      .logs/<LOCAL_NAMESPACE>/progress.json
+    If LOCAL_NAMESPACE is unset, it uses .logs/progress.json.
+    """
+    ns = (extra_env.get("LOCAL_NAMESPACE") or os.getenv("LOCAL_NAMESPACE") or "").strip()
+    if ns:
+        return LOG_DIR / ns / "progress.json"
+    return LOG_DIR / "progress.json"
 
 
 def _parse_dotenv(path: Path) -> Dict[str, str]:
@@ -530,23 +542,24 @@ def main() -> int:
 
     for test in tests:
         extra_env = _parse_dotenv(test.env_file)
+        progress_path = _progress_path_for_env(extra_env)
 
         # Clear stale progress.json to avoid confusion if this test fails early
-        if PROGRESS_JSON.exists() and not args.dry_run:
-            PROGRESS_JSON.unlink()
+        if progress_path.exists() and not args.dry_run:
+            progress_path.unlink()
 
         # Run the deployment with timing
         test_start_time = time.time()
         rc, parsed_sim_id, parsed_sim_name = _run_deploy(test, extra_env=extra_env, dry_run=args.dry_run)
         test_elapsed = time.time() - test_start_time
         test_timings.append((test.key, test_elapsed))
-        bootstrap_method, bootstrap_tool, bootstrap_pwchange = _read_progress_bootstrap_details(PROGRESS_JSON)
+        bootstrap_method, bootstrap_tool, bootstrap_pwchange = _read_progress_bootstrap_details(progress_path)
 
         ok = (rc == 0)
         status = "SUCCESS" if ok else f"FAIL(rc={rc})"
         sim_id, sim_name = parsed_sim_id, parsed_sim_name
         if not sim_id or not sim_name:
-            file_sim_id, file_sim_name = _read_progress_sim_id(PROGRESS_JSON)
+            file_sim_id, file_sim_name = _read_progress_sim_id(progress_path)
             sim_id = sim_id or file_sim_id
             sim_name = sim_name or file_sim_name
         _append_line(
@@ -562,7 +575,7 @@ def main() -> int:
         if not args.dry_run:
             # If test failed, download logs BEFORE any cleanup.
             if not ok:
-                ssh_config = _read_progress_ssh_config(PROGRESS_JSON)
+                ssh_config = _read_progress_ssh_config(progress_path)
                 _download_failure_logs(test.key, ssh_config, sim_name)
 
             # If stop-on-fail is enabled, keep the failed simulation for investigation.
@@ -575,7 +588,7 @@ def main() -> int:
                 else:
                     _append_line(
                         SUMMARY_LOG,
-                        f"[{_now()}] {test.key} cleanup skipped (stop-on-fail enabled; no simulation_id in {PROGRESS_JSON})",
+                            f"[{_now()}] {test.key} cleanup skipped (stop-on-fail enabled; no simulation_id in {progress_path})",
                     )
             else:
                 # Default: cleanup after a run (success or failure).
@@ -593,7 +606,7 @@ def main() -> int:
                     except Exception as e:
                         _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} WARNING: cleanup exception: {e}")
                 else:
-                    _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} cleanup skipped (no simulation_id in {PROGRESS_JSON})")
+                    _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} cleanup skipped (no simulation_id in {progress_path})")
 
         if not ok:
             overall_failures += 1
