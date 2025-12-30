@@ -43,7 +43,6 @@ This solution automates the complete BCM deployment process:
 |---------|--------------|--------|
 | BCM 11.31.0 | `bcm-11.31.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 11.30.0 | `bcm-11.30.0-ubuntu2404.iso` | ✓ Tested |
-| BCM 11.0.0 | `bcm-11.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.30.0 | `bcm-10.30.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.25.03 | `bcm-10.25.03-ubuntu2404.iso` | ✓ Tested |
 
