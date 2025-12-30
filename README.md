@@ -4,6 +4,8 @@
 
 This repository provides automated deployment of Base Command Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
 
+The code in this repo is provided **as-is**, with **no guarantees**. By using this code, you accept responsibility for all risks that may come from using it.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -39,6 +41,8 @@ This solution automates the complete BCM deployment process:
 **Tested BCM Versions:**
 | Version | ISO Filename | Status |
 |---------|--------------|--------|
+| BCM 11.31.0 | `bcm-11.31.0-ubuntu2404.iso` | ✓ Tested |
+| BCM 11.30.0 | `bcm-11.30.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 11.0.0 | `bcm-11.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.30.0 | `bcm-10.30.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.25.03 | `bcm-10.25.03-ubuntu2404.iso` | ✓ Tested |
@@ -96,11 +100,15 @@ cp sample-configs/env.example .env
 
 # Edit .env with your actual credentials
 # Required fields:
-#   AIR_API_TOKEN - Your API token from Air
-#   AIR_USERNAME - Your Air account email
-#   AIR_API_URL - https://air.nvidia.com
-#   BCM_PRODUCT_KEY - Your BCM license key
-#   BCM_ADMIN_EMAIL - Admin email for BCM
+#   AIR_API_TOKEN     - Your API token from Air
+#   AIR_USERNAME      - Your Air account email
+#   BCM_PRODUCT_KEY   - Your BCM license key
+#
+# Optional (if you need to override defaults):
+#   AIR_API_URL       - Defaults to https://air.nvidia.com
+#   SSH_PRIVATE_KEY   - Defaults to ~/.ssh/id_rsa
+#   SSH_PUBLIC_KEY    - Defaults to ~/.ssh/id_rsa.pub
+#   BCM_ADMIN_EMAIL   - Defaults to AIR_USERNAME
 ```
 
 **Example `.env` file:**
@@ -644,7 +652,10 @@ All configuration is managed through a `.env` file in the project root. Copy `sa
 
 - `AIR_API_TOKEN` - Your NVIDIA Air API authentication token (required)
 - `AIR_USERNAME` - Your Air account email address (required)
-- `AIR_API_URL` - NVIDIA Air API base URL: `https://air.nvidia.com` (required)
+- `BCM_PRODUCT_KEY` - Your BCM license key (required)
+- `AIR_API_URL` - NVIDIA Air API base URL: `https://air.nvidia.com` (optional; defaults to external Air)
+- `SSH_PRIVATE_KEY` - Path to your SSH private key (optional; defaults to `~/.ssh/id_rsa`)
+- `SSH_PUBLIC_KEY` - Path to your SSH public key (optional; defaults to `~/.ssh/id_rsa.pub`)
 - `UV_LINK_MODE` - Set to `copy` to suppress hardlink warnings in WSL (optional)
 
 ## Repository Structure
