@@ -17,7 +17,10 @@ BCM_VERSION="__BCM_VERSION__"
 BCM_FULL_VERSION="__BCM_FULL_VERSION__"
 BCM_ADMIN_EMAIL="__ADMIN_EMAIL__"
 BCM_EXTERNAL_INTERFACE="__EXTERNAL_INTERFACE__"  # Connected to outbound (DHCP)
-BCM_MANAGEMENT_INTERFACE="__MANAGEMENT_INTERFACE__"  # Connected to oob-mgmt-switch (192.168.200.254)
+BCM_MANAGEMENT_INTERFACE="__MANAGEMENT_INTERFACE__"  # Internal cluster network interface ("internalnet")
+BCM_INTERNALNET_IP="__INTERNALNET_IP__"
+BCM_INTERNALNET_BASE="__INTERNALNET_BASE__"
+BCM_INTERNALNET_PREFIXLEN="__INTERNALNET_PREFIXLEN__"
 BCM_ISO_PATH="/home/ubuntu/bcm.iso"
 BCM_MOUNT_PATH="/mnt/dvd"  # Ansible mounts ISO here
 
@@ -609,9 +612,9 @@ cat > /home/ubuntu/bcm-ansible-installer/group_vars/head_node/cluster-settings.y
 external_interface: ${BCM_EXTERNAL_INTERFACE}
 external_ip_address: DHCP
 management_interface: ${BCM_MANAGEMENT_INTERFACE}
-management_ip_address: 192.168.200.254
-management_network_baseaddress: 192.168.200.0
-management_network_netmask: 24
+management_ip_address: ${BCM_INTERNALNET_IP}
+management_network_baseaddress: ${BCM_INTERNALNET_BASE}
+management_network_netmask: ${BCM_INTERNALNET_PREFIXLEN}
 install_medium: dvd
 install_medium_dvd_path: "${BCM_ISO_PATH}"
 timezone: UTC
@@ -639,7 +642,7 @@ license:
   mac: "{{ ansible_default_ipv4.macaddress }}"
 SETTINGS
 echo "  External interface: ${BCM_EXTERNAL_INTERFACE} (outbound/DHCP)"
-echo "  Management interface: ${BCM_MANAGEMENT_INTERFACE} (oob-mgmt-switch/192.168.200.254)"
+echo "  Internalnet interface: ${BCM_MANAGEMENT_INTERFACE} (${BCM_INTERNALNET_BASE}/${BCM_INTERNALNET_PREFIXLEN} -> ${BCM_INTERNALNET_IP})"
 
 # Create post_install_user_tasks.yml for DNS fixes
 cat > /home/ubuntu/bcm-ansible-installer/post_install_user_tasks.yml <<POSTTASKS

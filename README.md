@@ -267,7 +267,7 @@ The default topology (`topologies/default/`) creates the following environment:
 | Node name        | Interface | IP address        | Function          |
 | ---------------- | --------- | ----------------- | ----------------- |
 | bcm-01           | eth0      | DHCP (outbound)   | BCM head node     |
-| bcm-01           | eth4      | 192.168.200.254   | Management network|
+| bcm-01           | eth4      | 192.168.200.254   | Internal cluster network (internalnet)|
 | oob-mgmt-switch  | -         | -                 | OOB switch        |
 | leaf-01 to 04    | eth0      | (via oob-switch)  | Cumulus switches  |
 | spine-01, 02     | eth0      | (via oob-switch)  | Spine switches    |
@@ -275,8 +275,8 @@ The default topology (`topologies/default/`) creates the following environment:
 
 **Key Network Details:**
 - **Outbound Interface**: `bcm-01:eth0` → `outbound` (DHCP, internet access, SSH service)
-- **Management Network**: `192.168.200.0/24` via `oob-mgmt-switch`
-- **BCM Management IP**: `192.168.200.254` on the interface connected to `oob-mgmt-switch`
+- **Internal cluster network (internalnet)**: `192.168.200.0/24` by default (legacy: via `oob-mgmt-switch`)
+- **BCM internalnet IP**: `192.168.200.254` by default (derived from `BCM_INTERNALNET_NW`)
 - **Static MAC for Licensing**: `48:b0:2d:00:00:00` on `bcm-01:eth0`
 
 ## Project Structure
@@ -335,7 +335,7 @@ See `topologies/README.md` for full requirements. Key points:
 1. **BCM Node Must Use eth0 for "outbound"**: The BCM head node's `eth0` **must** be connected to `"outbound"` for SSH access. This is a NVIDIA Air requirement - the `40-air.yaml` netplan only configures `eth0` for DHCP.
 2. **BCM Node Naming**: Node name must start with `bcm` (e.g., `bcm-01`, `bcm-headnode`)
 3. **Disable OOB (Recommended)**: Set `"oob": false` to have full control over all interfaces
-4. **Management Interface**: Connect another interface to `oob-mgmt-switch` for the 192.168.200.0/24 network
+4. **Internalnet Interface (legacy)**: Connect another interface to `oob-mgmt-switch` for the internal cluster network (default `192.168.200.0/24`)
 
 ### Example Link to "outbound"
 
@@ -781,7 +781,7 @@ User Machine                     SSH Proxy                    bcm-01 (head node)
 [Step 9] ansible-playbook playbook.yml
     ├── Mount ISO to /mnt/dvd
     ├── Install BCM packages
-    ├── Configure networking (external + management interfaces)
+    ├── Configure networking (external + internalnet interfaces)
     ├── Set up DNS (bind9)
     ├── Set up TFTP/PXE
     ├── Configure cluster manager

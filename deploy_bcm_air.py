@@ -13,6 +13,7 @@ import json
 import argparse
 import subprocess
 import re
+import ipaddress
 from datetime import datetime
 from pathlib import Path
 import requests
@@ -202,6 +203,11 @@ class AirBCMDeployer:
         # Load SSH key paths from environment
         self.ssh_private_key = os.getenv('SSH_PRIVATE_KEY', '~/.ssh/id_rsa')
         self.ssh_public_key = os.getenv('SSH_PUBLIC_KEY', '~/.ssh/id_rsa.pub')
+
+        # Internal cluster network ("internalnet") configuration
+        # NOTE: downstream installer still consumes these as management_* fields.
+        self.bcm_internalnet_if_override = (os.getenv("BCM_INTERNALNET_IF") or "").strip() or None
+        self.bcm_internalnet_nw_cidr = (os.getenv("BCM_INTERNALNET_NW") or "192.168.200.0/24").strip()
         
         # Expand ~ to home directory
         self.ssh_private_key = os.path.expanduser(self.ssh_private_key)
@@ -227,6 +233,134 @@ class AirBCMDeployer:
         }
         self.simulation_id = None
         self.bcm_node_id = None
+
+        # Derived internalnet parameters (populated after we know node/topology)
+        self.bcm_internalnet_interface = None
+        self.bcm_internalnet_ip_primary = None
+        self.bcm_internalnet_ip_secondary = None
+        self.bcm_internalnet_base = None
+        self.bcm_internalnet_prefixlen = None
+
+    def _derive_internalnet_params(self):
+        """
+        Derive internalnet base/prefixlen and the primary/secondary IPs from BCM_INTERNALNET_NW.
+        Option C:
+          - /24 -> primary .254, secondary .253
+          - else -> primary last usable, secondary second-to-last usable
+
+        Minimum supported subnet: /29 (must have at least 4 usable IPs requirement).
+        """
+        try:
+            net = ipaddress.ip_network(self.bcm_internalnet_nw_cidr, strict=False)
+        except Exception as e:
+            raise ValueError(f"Invalid BCM_INTERNALNET_NW '{self.bcm_internalnet_nw_cidr}': {e}")
+
+        if net.version != 4:
+            raise ValueError(f"BCM_INTERNALNET_NW must be IPv4, got: {net}")
+
+        # /29 is the smallest accepted
+        if net.prefixlen > 29:
+            raise ValueError(
+                f"BCM_INTERNALNET_NW must be /29 or larger network (prefixlen <= 29). Got: {net}"
+            )
+
+        self.bcm_internalnet_base = str(net.network_address)
+        self.bcm_internalnet_prefixlen = int(net.prefixlen)
+
+        if net.prefixlen == 24:
+            primary = ipaddress.ip_address(int(net.network_address) + 254)
+            secondary = ipaddress.ip_address(int(net.network_address) + 253)
+        else:
+            # For IPv4 prefixlen <= 29, broadcast exists and there are at least 6 usable hosts.
+            primary = ipaddress.ip_address(int(net.broadcast_address) - 1)
+            secondary = ipaddress.ip_address(int(net.broadcast_address) - 2)
+
+        self.bcm_internalnet_ip_primary = str(primary)
+        self.bcm_internalnet_ip_secondary = str(secondary)
+
+    def _collect_bcm_interfaces_from_topology_links(self, topology_data) -> list[str]:
+        """
+        Best-effort extraction of BCM interface names from topology links.
+        """
+        links = topology_data.get('content', {}).get('links', [])
+        out: set[str] = set()
+        for link in links:
+            if len(link) != 2:
+                continue
+            a, b = link
+            for ep in (a, b):
+                if isinstance(ep, dict) and ep.get("node") == self.bcm_node_name:
+                    iface = ep.get("interface")
+                    if isinstance(iface, str) and iface:
+                        out.add(iface)
+        return sorted(out)
+
+    def _select_internalnet_interface_from_interfaces(self, ifaces: list[str]) -> str | None:
+        """
+        Select internalnet interface from an available interface list (no topology).
+        Priority (after env override handled elsewhere):
+          - eth1 if present
+          - lowest ethN where N>0
+          - any iface != eth0
+        """
+        if not ifaces:
+            return None
+        if "eth1" in ifaces:
+            return "eth1"
+        ethN: list[tuple[int, str]] = []
+        for i in ifaces:
+            m = re.match(r"^eth(\d+)$", i)
+            if m:
+                n = int(m.group(1))
+                if n > 0:
+                    ethN.append((n, i))
+        if ethN:
+            return sorted(ethN)[0][1]
+        non_eth0 = [i for i in ifaces if i != "eth0"]
+        return non_eth0[0] if non_eth0 else None
+
+    def _list_node_interfaces_from_api(self, sim_id: str, node_name: str) -> list[str]:
+        """
+        Best-effort interface-name discovery from Air API for an existing simulation.
+        We avoid relying on a topology file in --sim-id mode.
+        """
+        base = self.api_base_url.rstrip("/")
+
+        # Prefer the aggregate endpoint we already use in diagnostics.
+        try:
+            resp = requests.get(
+                f"{base}/api/v2/simulations/nodes/interfaces/services/",
+                headers=self.headers,
+                params={"simulation": sim_id},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", data) if isinstance(data, dict) else data
+                ifaces: set[str] = set()
+                if isinstance(results, list):
+                    for row in results:
+                        if not isinstance(row, dict):
+                            continue
+                        # Try a few likely fields.
+                        rn = row.get("node_name") or row.get("node") or row.get("nodeTitle") or row.get("nodeName")
+                        if rn != node_name:
+                            continue
+                        for k in ("interface_name", "interface", "node_interface", "iface", "name"):
+                            v = row.get(k)
+                            if isinstance(v, str) and v.startswith("eth"):
+                                ifaces.add(v)
+                            # Sometimes interface is encoded like "bcm-01:eth1"
+                            if isinstance(v, str) and ":" in v:
+                                tail = v.split(":")[-1]
+                                if tail.startswith("eth"):
+                                    ifaces.add(tail)
+                return sorted(ifaces)
+        except Exception:
+            pass
+
+        # Fallback: no interfaces discovered
+        return []
     
     def _validate_ssh_keys(self):
         """Validate that SSH key files exist"""
@@ -664,8 +798,14 @@ class AirBCMDeployer:
     
     def detect_bcm_management_interface(self, topology_data):
         """
-        Detect which interface on the BCM node connects to "oob-mgmt-switch".
-        This interface will be configured as the BCM management network (192.168.200.x).
+        Detect which interface on the BCM node should be used for the internal cluster network
+        ("internalnet"). This is NOT production BMC/mgmtnet; it is the installer-facing internal
+        network used by BCM.
+        
+        Selection priority:
+          a) BCM_INTERNALNET_IF (if set) - accept blindly (no validation here)
+          b) if BCM has a link to oob-mgmt-switch, use that interface (legacy/back-compat)
+          c) else default to eth1, then lowest ethN>0 observed in topology links, else any iface != eth0
         
         Args:
             topology_data: Parsed JSON topology data
@@ -673,6 +813,10 @@ class AirBCMDeployer:
         Returns:
             Interface name (e.g., 'eth0', 'eth1') or None if not found
         """
+        if self.bcm_internalnet_if_override:
+            print(f"  ℹ Using BCM_INTERNALNET_IF override: {self.bcm_node_name}:{self.bcm_internalnet_if_override}")
+            return self.bcm_internalnet_if_override
+
         links = topology_data.get('content', {}).get('links', [])
         
         for link in links:
@@ -686,14 +830,20 @@ class AirBCMDeployer:
             if isinstance(endpoint1, dict) and isinstance(endpoint2, dict):
                 if endpoint1.get('node') == self.bcm_node_name and endpoint2.get('node') == 'oob-mgmt-switch':
                     iface = endpoint1.get('interface')
-                    print(f"  ✓ BCM management interface detected: {self.bcm_node_name}:{iface} → oob-mgmt-switch")
+                    print(f"  ✓ BCM internalnet interface detected: {self.bcm_node_name}:{iface} → oob-mgmt-switch (legacy)")
                     return iface
                 if endpoint2.get('node') == self.bcm_node_name and endpoint1.get('node') == 'oob-mgmt-switch':
                     iface = endpoint2.get('interface')
-                    print(f"  ✓ BCM management interface detected: {self.bcm_node_name}:{iface} → oob-mgmt-switch")
+                    print(f"  ✓ BCM internalnet interface detected: {self.bcm_node_name}:{iface} → oob-mgmt-switch (legacy)")
                     return iface
-        
-        print(f"  ⚠ No oob-mgmt-switch connection found for {self.bcm_node_name}")
+
+        ifaces = self._collect_bcm_interfaces_from_topology_links(topology_data)
+        chosen = self._select_internalnet_interface_from_interfaces(ifaces)
+        if chosen:
+            print(f"  ℹ No oob-mgmt-switch link found; using internalnet interface default: {self.bcm_node_name}:{chosen}")
+            return chosen
+
+        print(f"  ⚠ Could not determine internalnet interface for {self.bcm_node_name} (no interfaces found in topology links)")
         return None
     
     def _get_topology_nodes(self):
@@ -879,11 +1029,18 @@ class AirBCMDeployer:
                 "See topologies/topology-design.md for requirements."
             )
         
-        # Detect which interface connects to oob-mgmt-switch (for BCM management network)
+        # Detect which interface to use for the internal cluster network ("internalnet")
+        # NOTE: downstream installer variable is still called management_interface.
+        self._derive_internalnet_params()
         self.bcm_management_interface = self.detect_bcm_management_interface(topology_data)
+        self.bcm_internalnet_interface = self.bcm_management_interface
         if not self.bcm_management_interface:
-            print(f"  ℹ No oob-mgmt-switch found - using eth0 as default management interface")
-            self.bcm_management_interface = 'eth0'
+            print(f"  ℹ Could not detect internalnet interface; defaulting to eth1")
+            self.bcm_management_interface = 'eth1'
+            self.bcm_internalnet_interface = 'eth1'
+
+        print(f"  Internalnet network: {self.bcm_internalnet_base}/{self.bcm_internalnet_prefixlen}")
+        print(f"  Internalnet IP (primary): {self.bcm_internalnet_ip_primary}")
         
         print(f"\nCreating simulation from JSON file: {simulation_name}")
         
@@ -1379,11 +1536,17 @@ class AirBCMDeployer:
         interface = getattr(self, 'bcm_outbound_interface', 'eth0')
         
         print("\nEnabling SSH service for simulation...")
-        print(f"  Creating SSH service on {self.bcm_node_name}:{interface}...")
+        print(f"  Ensuring SSH service on {self.bcm_node_name}:{interface}...")
 
         if getattr(self, "skip_ssh_service", False):
             print("  ℹ Skipping SSH service creation (--skip-ssh-service)")
             return None
+
+        # If an SSH service already exists for this node/interface, reuse it.
+        existing = self.get_ssh_service_info(node_name=self.bcm_node_name, interface=interface)
+        if existing and existing.get("hostname") and existing.get("port"):
+            print(f"  ✓ SSH service already exists (reusing): {existing.get('hostname')}:{existing.get('port')}")
+            return existing
         
         try:
             if getattr(self, "no_sdk", False):
@@ -1421,7 +1584,7 @@ class AirBCMDeployer:
             traceback.print_exc()
             return None
     
-    def get_ssh_service_info(self):
+    def get_ssh_service_info(self, node_name: str | None = None, interface: str | None = None):
         """
         Get SSH service details for the BCM head node
         
@@ -1443,17 +1606,44 @@ class AirBCMDeployer:
                 # v1 API can return list directly or dict with results
                 services = data if isinstance(data, list) else data.get('results', [])
                 
-                # Look for SSH service for BCM head node
+                target_node = node_name or self.bcm_node_name
+                target_iface = interface
+
+                def _matches_iface(svc: dict) -> bool:
+                    if not target_iface:
+                        return True
+                    # Common field names seen in Air v1 service objects.
+                    for k in ("interface", "node_interface", "interface_name"):
+                        v = svc.get(k)
+                        if isinstance(v, str):
+                            # could be "bcm-01:eth0" or "eth0"
+                            if v == target_iface or v.endswith(f":{target_iface}"):
+                                return True
+                    return False
+
+                # Prefer matching node+iface if possible; otherwise fall back to first SSH service for node.
+                best = None
+                fallback = None
                 for service in services:
-                    if (service.get('service_type') == 'ssh' and 
-                        service.get('node_name') == self.bcm_node_name):
-                        return {
-                            'hostname': service.get('host'),
-                            'port': service.get('src_port'),  # src_port is the external port
-                            'username': 'root',  # BCM uses root, configured via cloud-init
-                            'link': service.get('link'),
-                            'service_id': service.get('id')
-                        }
+                    if service.get('service_type') != 'ssh':
+                        continue
+                    if service.get('node_name') != target_node:
+                        continue
+                    if fallback is None:
+                        fallback = service
+                    if _matches_iface(service):
+                        best = service
+                        break
+
+                chosen = best or fallback
+                if chosen:
+                    return {
+                        'hostname': chosen.get('host'),
+                        'port': chosen.get('src_port'),  # src_port is the external port
+                        'username': 'root',  # BCM uses root, configured via cloud-init
+                        'link': chosen.get('link'),
+                        'service_id': chosen.get('id')
+                    }
             
             return None
             
@@ -2258,6 +2448,9 @@ Host bcm
         script_content = script_content.replace('__ADMIN_EMAIL__', self.bcm_admin_email)
         script_content = script_content.replace('__EXTERNAL_INTERFACE__', self.bcm_outbound_interface)
         script_content = script_content.replace('__MANAGEMENT_INTERFACE__', self.bcm_management_interface)
+        script_content = script_content.replace('__INTERNALNET_IP__', str(self.bcm_internalnet_ip_primary or ""))
+        script_content = script_content.replace('__INTERNALNET_BASE__', str(self.bcm_internalnet_base or ""))
+        script_content = script_content.replace('__INTERNALNET_PREFIXLEN__', str(self.bcm_internalnet_prefixlen or ""))
         
         # Write to temp file
         temp_script = Path('/tmp/bcm_install.sh')
@@ -2432,7 +2625,10 @@ Host bcm
         
         print(f"\nBCM Access:")
         print(f"  Hostname: {self.bcm_node_name}")
-        print(f"  Internal IP: 192.168.200.254")
+        if getattr(self, "bcm_internalnet_ip_primary", None) and getattr(self, "bcm_internalnet_base", None) and getattr(self, "bcm_internalnet_prefixlen", None):
+            print(f"  Internalnet: {self.bcm_internalnet_base}/{self.bcm_internalnet_prefixlen} -> {self.bcm_internalnet_ip_primary}")
+        else:
+            print(f"  Internalnet: 192.168.200.0/24 -> 192.168.200.254")
         print(f"  Username: root")
         print(f"  Password: {self.default_password}")
         
@@ -2708,6 +2904,20 @@ Examples:
         help='Path to topology directory (containing topology.json and features.yaml) or legacy JSON file. (default: topologies/default)'
     )
     parser.add_argument(
+        '--sim-id',
+        help='Use an existing simulation ID instead of creating a new simulation from a topology.'
+    )
+    parser.add_argument(
+        '--primary',
+        metavar='HOSTNAME',
+        help='Primary BCM node hostname (used with --sim-id). If omitted, deploy_bcm_air.py will try to select one based on node names.'
+    )
+    parser.add_argument(
+        '--secondary',
+        metavar='HOSTNAME',
+        help='Secondary BCM node hostname for HA install (used with --sim-id). No auto-detection is performed.'
+    )
+    parser.add_argument(
         '--name',
         help='Custom simulation name (will prompt if not provided, default: YYYYMMNNN-BCM-Lab)'
     )
@@ -2869,6 +3079,11 @@ Examples:
             simulation_name = args.name
             print(f"\nUsing simulation name from command line: {simulation_name}")
             progress.complete_step('simulation_name_set', simulation_name=simulation_name)
+        elif args.sim_id:
+            # Existing simulation: name is fetched later from the API (best-effort).
+            simulation_name = f"sim-{args.sim_id[:8]}"
+            print(f"\nUsing existing simulation: {args.sim_id}")
+            progress.complete_step('simulation_name_set', simulation_name=simulation_name)
         else:
             simulation_name = deployer.prompt_simulation_name()
             progress.complete_step('simulation_name_set', simulation_name=simulation_name)
@@ -2889,40 +3104,172 @@ Examples:
                 topology_file = topology_path.parent / f"{topology_path.name}.json"
                 topology_dir = topology_path.parent
             else:
-                print(f"\n✗ Error: Topology not found: {topology_path}")
-                print("  Expected: directory with topology.json or a .json file")
-                sys.exit(1)
+                if args.sim_id:
+                    # In existing-sim mode, topology is optional (used only for optional post-install features).
+                    topology_file = None
+                    topology_dir = topology_path.parent
+                else:
+                    print(f"\n✗ Error: Topology not found: {topology_path}")
+                    print("  Expected: directory with topology.json or a .json file")
+                    sys.exit(1)
+
+        # Validate existing-sim flags
+        if args.secondary and not args.sim_id:
+            print("\n✗ Error: --secondary requires --sim-id")
+            return 2
+        if args.primary and not args.sim_id:
+            print("\n✗ Error: --primary requires --sim-id")
+            return 2
+        if args.primary and args.secondary:
+            print("\n✗ Error: Use only one of --primary or --secondary")
+            return 2
         
         # Step: Create simulation
         if args.resume and progress.is_step_completed('simulation_created'):
             deployer.simulation_id = progress.get('simulation_id')
             deployer.bcm_node_name = progress.get('bcm_node_name', 'bcm-01')
             deployer.bcm_outbound_interface = progress.get('bcm_outbound_interface', 'eth0')
-            deployer.bcm_management_interface = progress.get('bcm_management_interface', 'eth0')
+            deployer.bcm_management_interface = progress.get('bcm_management_interface', 'eth1')
+            deployer.bcm_internalnet_interface = progress.get('bcm_internalnet_interface', deployer.bcm_management_interface)
+            deployer.bcm_internalnet_base = progress.get('bcm_internalnet_base')
+            deployer.bcm_internalnet_prefixlen = progress.get('bcm_internalnet_prefixlen')
+            deployer.bcm_internalnet_ip_primary = progress.get('bcm_internalnet_ip_primary')
+            deployer.bcm_internalnet_ip_secondary = progress.get('bcm_internalnet_ip_secondary')
             deployer.userconfig_id = progress.get('userconfig_id')
             print(f"  [resume] Simulation ID: {deployer.simulation_id}")
             print(f"  [resume] BCM outbound interface: {deployer.bcm_outbound_interface}")
-            print(f"  [resume] BCM management interface: {deployer.bcm_management_interface}")
+            print(f"  [resume] BCM internalnet interface: {deployer.bcm_management_interface}")
             if deployer.userconfig_id:
                 print(f"  [resume] UserConfig ID: {deployer.userconfig_id}")
         else:
-            if not topology_file.exists():
-                print(f"\n✗ Error: Topology file not found: {topology_file}")
-                sys.exit(1)
-            
             # Step: Ensure UserConfig exists BEFORE simulation (avoids rate limiting)
             # UserConfigs are user-level, not simulation-specific
             userconfig_id = deployer.ensure_userconfig()
-            
-            deployer.create_simulation(topology_file, simulation_name)
-            progress.complete_step('simulation_created', 
-                                   simulation_id=deployer.simulation_id,
-                                   simulation_name=simulation_name,
-                                   bcm_node_name=deployer.bcm_node_name,
-                                   bcm_outbound_interface=deployer.bcm_outbound_interface,
-                                   bcm_management_interface=deployer.bcm_management_interface,
-                                   userconfig_id=userconfig_id,
-                                   topology_dir=str(topology_dir))
+
+            if args.sim_id:
+                deployer.simulation_id = args.sim_id
+
+                # Pull simulation name from API (best-effort)
+                try:
+                    r = requests.get(
+                        f"{api_base_url.rstrip('/')}/api/v2/simulations/{deployer.simulation_id}/",
+                        headers=deployer.headers,
+                        timeout=30,
+                    )
+                    if r.status_code == 200:
+                        sj = r.json()
+                        simulation_name = sj.get("title") or sj.get("name") or simulation_name
+                except Exception:
+                    pass
+
+                # Determine target node and install role
+                if args.secondary:
+                    target_node = args.secondary
+                    install_role = "secondary"
+                elif args.primary:
+                    target_node = args.primary
+                    install_role = "primary"
+                else:
+                    # Heuristic selection for primary only
+                    resp = requests.get(
+                        f"{api_base_url.rstrip('/')}/api/v2/simulations/nodes/",
+                        headers=deployer.headers,
+                        params={"simulation": deployer.simulation_id},
+                        timeout=30,
+                    )
+                    nodes = []
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        nodes = data.get("results", data) if isinstance(data, dict) else data
+                    names = [n.get("name") for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)]
+                    bcmish = [n for n in names if "bcm" in n.lower()]
+                    starts = [n for n in bcmish if n.lower().startswith("bcm")]
+                    candidates = starts or bcmish
+                    ends1 = [n for n in candidates if re.search(r"1$", n)]
+                    candidates = ends1 or candidates
+
+                    if deployer.non_interactive:
+                        if len(candidates) == 1:
+                            target_node = candidates[0]
+                            print(f"\n  [non-interactive] Using BCM node: {target_node}")
+                        else:
+                            print("\n✗ Could not uniquely determine BCM node in --sim-id mode.")
+                            print("  Please re-run with --primary <hostname>.")
+                            return 2
+                    else:
+                        if len(candidates) == 1:
+                            target_node = candidates[0]
+                            print(f"\n  ✓ Selected BCM node: {target_node}")
+                        elif len(candidates) > 1:
+                            print("\nMultiple BCM-like nodes found:")
+                            for i, n in enumerate(candidates, start=1):
+                                print(f"  {i}) {n}")
+                            choice = input("Select primary BCM node by number: ").strip()
+                            try:
+                                idx = int(choice)
+                                target_node = candidates[idx - 1]
+                            except Exception:
+                                print("✗ Invalid selection; re-run with --primary <hostname>")
+                                return 2
+                        else:
+                            target_node = input("Enter primary BCM node hostname: ").strip()
+                            if not target_node:
+                                print("✗ No hostname provided.")
+                                return 2
+                    install_role = "primary"
+
+                deployer.bcm_node_name = target_node
+                deployer.bcm_outbound_interface = "eth0"  # requirement unchanged
+
+                # Derive internalnet params and pick interface without a topology file
+                deployer._derive_internalnet_params()
+                if deployer.bcm_internalnet_if_override:
+                    deployer.bcm_management_interface = deployer.bcm_internalnet_if_override
+                else:
+                    ifaces = deployer._list_node_interfaces_from_api(deployer.simulation_id, deployer.bcm_node_name)
+                    chosen = deployer._select_internalnet_interface_from_interfaces(ifaces) or "eth1"
+                    deployer.bcm_management_interface = chosen
+                deployer.bcm_internalnet_interface = deployer.bcm_management_interface
+
+                # Primary vs secondary internalnet IP for install
+                if install_role == "secondary":
+                    deployer.bcm_internalnet_ip_primary = deployer.bcm_internalnet_ip_secondary
+
+                progress.complete_step(
+                    'simulation_created',
+                    simulation_id=deployer.simulation_id,
+                    simulation_name=simulation_name,
+                    bcm_node_name=deployer.bcm_node_name,
+                    bcm_outbound_interface=deployer.bcm_outbound_interface,
+                    bcm_management_interface=deployer.bcm_management_interface,
+                    bcm_internalnet_interface=deployer.bcm_internalnet_interface,
+                    bcm_internalnet_base=deployer.bcm_internalnet_base,
+                    bcm_internalnet_prefixlen=deployer.bcm_internalnet_prefixlen,
+                    bcm_internalnet_ip_primary=deployer.bcm_internalnet_ip_primary,
+                    bcm_internalnet_ip_secondary=deployer.bcm_internalnet_ip_secondary,
+                    userconfig_id=userconfig_id,
+                    topology_dir=str(topology_dir),
+                    existing_sim=True,
+                    install_role=install_role,
+                )
+            else:
+                if not topology_file or not topology_file.exists():
+                    print(f"\n✗ Error: Topology file not found: {topology_file}")
+                    sys.exit(1)
+                deployer.create_simulation(topology_file, simulation_name)
+                progress.complete_step('simulation_created', 
+                                       simulation_id=deployer.simulation_id,
+                                       simulation_name=simulation_name,
+                                       bcm_node_name=deployer.bcm_node_name,
+                                       bcm_outbound_interface=deployer.bcm_outbound_interface,
+                                       bcm_management_interface=deployer.bcm_management_interface,
+                                       bcm_internalnet_interface=deployer.bcm_internalnet_interface,
+                                       bcm_internalnet_base=deployer.bcm_internalnet_base,
+                                       bcm_internalnet_prefixlen=deployer.bcm_internalnet_prefixlen,
+                                       bcm_internalnet_ip_primary=deployer.bcm_internalnet_ip_primary,
+                                       bcm_internalnet_ip_secondary=deployer.bcm_internalnet_ip_secondary,
+                                       userconfig_id=userconfig_id,
+                                       topology_dir=str(topology_dir))
         
         # Step: Assign cloud-init to nodes (needs simulation to exist)
         if args.resume and progress.is_step_completed('cloudinit_configured'):
@@ -3006,7 +3353,7 @@ Examples:
         print("Configuring SSH Access")
         print("="*60)
         
-        ssh_info = deployer.get_ssh_service_info()
+        ssh_info = deployer.get_ssh_service_info(interface=getattr(deployer, "bcm_outbound_interface", "eth0"))
         
         if not ssh_info:
             print("\n✗ Error: SSH service not available")

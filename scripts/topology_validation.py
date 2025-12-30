@@ -13,7 +13,13 @@ Usage:
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
 
 
 class TopologyValidator:
@@ -168,25 +174,37 @@ class TopologyValidator:
         return outbound_iface
     
     def validate_bcm_management(self, bcm_node):
-        """Validate BCM node has oob-mgmt-switch connection"""
+        """Validate BCM node has internalnet interface (legacy: oob-mgmt-switch connection)"""
         connections = self.find_node_connections(bcm_node)
-        
-        mgmt_iface = None
+
+        internalnet_if = (os.getenv("BCM_INTERNALNET_IF") or "").strip() or None
+        if internalnet_if:
+            if internalnet_if in connections:
+                self.info.append(f"BCM internalnet interface (BCM_INTERNALNET_IF): {bcm_node}:{internalnet_if}")
+            else:
+                self.warnings.append(
+                    f"BCM_INTERNALNET_IF is set to '{internalnet_if}', but that interface is not present on {bcm_node} connections.\n"
+                    f"   Found interfaces: {sorted([k for k in connections.keys() if k])}\n"
+                    f"   deploy_bcm_air.py will accept BCM_INTERNALNET_IF blindly; double-check your topology links."
+                )
+            return internalnet_if
+
+        # Legacy/back-compat: prefer oob-mgmt-switch if present
+        legacy_iface = None
         for iface, target in connections.items():
             if target == 'oob-mgmt-switch':
-                mgmt_iface = iface
+                legacy_iface = iface
                 break
-        
-        if not mgmt_iface:
-            self.warnings.append(
-                f"BCM node '{bcm_node}' has no interface connected to 'oob-mgmt-switch'\n"
-                f"   This is recommended for BCM management network (192.168.200.0/24)\n"
-                f"   Will default to eth0 for management interface"
-            )
-            return None
-        
-        self.info.append(f"BCM management interface: {bcm_node}:{mgmt_iface} → oob-mgmt-switch")
-        return mgmt_iface
+
+        if legacy_iface:
+            self.info.append(f"BCM internalnet interface (legacy): {bcm_node}:{legacy_iface} → oob-mgmt-switch")
+            return legacy_iface
+
+        self.warnings.append(
+            f"BCM node '{bcm_node}' has no interface connected to 'oob-mgmt-switch' (legacy).\n"
+            f"   deploy_bcm_air.py will default internalnet to eth1 when BCM_INTERNALNET_IF is not set."
+        )
+        return None
     
     def validate_oob_disabled(self):
         """Check if OOB is disabled (recommended)"""
@@ -318,6 +336,13 @@ Examples:
     )
     
     args = parser.parse_args()
+
+    # Load .env if present so validation can consider BCM_INTERNALNET_* overrides.
+    if load_dotenv is not None:
+        try:
+            load_dotenv()
+        except Exception:
+            pass
     
     all_passed = True
     
