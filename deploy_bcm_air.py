@@ -1656,11 +1656,18 @@ class AirBCMDeployer:
             ssh_info: dict with SSH connection details
             
         Returns:
-            True if successful, False otherwise
+            (ok, details) where details contains:
+              - bootstrap_tool: "sshpass" | "expect" | None
+              - password_change_prompt: bool | None
+              - bootstrap_method: str (stable label for logs)
         """
         if not ssh_info:
             print("  ⚠ Cannot configure node without SSH service info")
-            return False
+            return False, {
+                "bootstrap_tool": None,
+                "password_change_prompt": None,
+                "bootstrap_method": "ssh-missing-ssh-info",
+            }
         
         print("\nConfiguring node passwords via SSH...")
         print(f"  Target: {ssh_info['hostname']}:{ssh_info['port']}")
@@ -1738,6 +1745,12 @@ echo "SETUP_COMPLETE"
         port = ssh_info['port']
         default_pass = "nvidia"
         
+        details = {
+            "bootstrap_tool": None,
+            "password_change_prompt": None,
+            "bootstrap_method": "ssh-unknown",
+        }
+
         try:
             # Wait for the SSH service to actually accept connections.
             # We see occasional "Connection refused" even though the service exists in the API.
@@ -1783,6 +1796,7 @@ echo "SETUP_COMPLETE"
             
             if sshpass_available:
                 print("\n  Using sshpass for password authentication...")
+                details["bootstrap_tool"] = "sshpass"
 
                 # Execute the setup script via stdin (avoids SCP and is more reliable)
                 print("  Executing setup script (via ssh stdin)...")
@@ -1807,7 +1821,10 @@ echo "SETUP_COMPLETE"
                 
                 if 'SETUP_COMPLETE' in (result.stdout or ""):
                     print("\n  ✓ Node configuration complete")
-                    return True
+                    # If sshpass succeeded, we necessarily did NOT hit an interactive forced password-change flow.
+                    details["password_change_prompt"] = False
+                    details["bootstrap_method"] = "ssh-sshpass-no-pwchange"
+                    return True, details
                 else:
                     print(f"\n  ⚠ Setup may not have completed fully")
                     if result.stderr:
@@ -1818,18 +1835,22 @@ echo "SETUP_COMPLETE"
                     if any(s in combined.lower() for s in ["current password", "new password", "password expired", "must change", "you are required to change"]):
                         print("  ℹ Detected a forced password-change prompt; falling back to expect...")
                         try_expect_fallback = True
+                        details["password_change_prompt"] = True
                     else:
                         print("  ℹ No forced password-change prompt detected (or not observable via sshpass).")
                     if not try_expect_fallback:
-                        return False
+                        details["bootstrap_method"] = "ssh-sshpass-failed"
+                        return False, details
 
             if (not sshpass_available) or try_expect_fallback:
                 # Fallback to expect
                 print("\n  Using expect fallback (handles forced password-change prompts)...")
+                details["bootstrap_tool"] = "expect"
                 if not _command_exists("expect"):
                     print("  ⚠ Required tool not found: expect")
                     print("  ⚠ Install sshpass or expect: sudo apt install sshpass expect")
-                    return False
+                    details["bootstrap_method"] = "ssh-expect-missing"
+                    return False, details
 
                 import base64
                 setup_script_b64 = base64.b64encode(setup_script_content.encode("utf-8")).decode("ascii")
@@ -1909,13 +1930,21 @@ expect {{
                             print(f"  {line}")
 
                 if result.returncode == 0 or 'SETUP_COMPLETE' in (result.stdout or ""):
+                    out = (result.stdout or "")
+                    saw_pwchange = "Detected forced password-change prompt" in out
+                    # Expect script explicitly prints one of:
+                    #   - "Detected forced password-change prompt ..."
+                    #   - "No forced password-change prompt detected (logged in directly)"
+                    details["password_change_prompt"] = saw_pwchange
+                    details["bootstrap_method"] = "ssh-expect-pwchange" if saw_pwchange else "ssh-expect-no-pwchange"
                     print("\n  ✓ Node configuration complete")
-                    return True
+                    return True, details
                 else:
                     print(f"\n  ⚠ Configuration may have issues")
                     if result.stderr:
                         print(f"    stderr: {result.stderr[:200]}")
-                    return False
+                    details["bootstrap_method"] = "ssh-expect-failed"
+                    return False, details
                     
         except FileNotFoundError as e:
             print(f"  ⚠ Required tool not found: {e}")
@@ -1925,13 +1954,16 @@ expect {{
             print(f"    2. Password: nvidia")
             print(f"    3. Run: bash -c 'echo \"ubuntu:{self.default_password}\" | sudo chpasswd'")
             print(f"    4. Add your SSH key to ~/.ssh/authorized_keys")
-            return False
+            details["bootstrap_method"] = "ssh-tool-missing"
+            return False, details
         except subprocess.TimeoutExpired:
             print("  ⚠ Configuration timed out")
-            return False
+            details["bootstrap_method"] = "ssh-timeout"
+            return False, details
         except Exception as e:
             print(f"  ⚠ Error configuring node: {e}")
-            return False
+            details["bootstrap_method"] = "ssh-error"
+            return False, details
         finally:
             # Clean up temp files
             setup_script_file.unlink(missing_ok=True)
@@ -2927,13 +2959,22 @@ Examples:
             print("\n⚠ Cloud-init configuration failed")
             print("  Note: On air.nvidia.com free tier, cloud-init may not be available")
             print("  Attempting SSH fallback for password configuration...")
-            if not deployer.configure_node_passwords(ssh_info):
+            ok, details = deployer.configure_node_passwords(ssh_info)
+            if not ok:
                 print("\n  ℹ Continuing with default password 'nvidia'")
                 print("  ℹ You can change it manually after connecting")
-            progress.set(bootstrap_method="ssh-expect")
+            progress.set(
+                bootstrap_method=details.get("bootstrap_method", "ssh-unknown"),
+                bootstrap_tool=details.get("bootstrap_tool"),
+                bootstrap_password_change_prompt=details.get("password_change_prompt"),
+            )
         else:
             print("\n✓ Passwords configured via cloud-init (set at boot time)")
-            progress.set(bootstrap_method="cloud-init")
+            progress.set(
+                bootstrap_method="cloud-init",
+                bootstrap_tool="cloud-init",
+                bootstrap_password_change_prompt=None,
+            )
         
         # Step: Install BCM
         if not args.skip_ansible:

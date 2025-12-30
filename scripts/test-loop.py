@@ -120,12 +120,24 @@ def _read_progress_ssh_config(progress_path: Path) -> Optional[str]:
     """
     if not progress_path.exists():
         return None
+    try:
+        import json
+
+        data = json.loads(progress_path.read_text(encoding="utf-8"))
+        return data.get("ssh_config_file")
+    except Exception:
+        return None
 
 
 def _read_progress_bootstrap_method(progress_path: Path) -> Optional[str]:
     """
     Returns bootstrap_method from .logs/progress.json if present.
-    Expected values: "cloud-init" or "ssh-expect".
+    Expected values include:
+      - cloud-init
+      - ssh-sshpass-no-pwchange
+      - ssh-expect-pwchange
+      - ssh-expect-no-pwchange
+    (plus error variants like ssh-*-failed)
     """
     if not progress_path.exists():
         return None
@@ -136,13 +148,25 @@ def _read_progress_bootstrap_method(progress_path: Path) -> Optional[str]:
         return data.get("bootstrap_method")
     except Exception:
         return None
+
+
+def _read_progress_bootstrap_details(progress_path: Path) -> Tuple[Optional[str], Optional[str], Optional[bool]]:
+    """
+    Returns (bootstrap_method, bootstrap_tool, bootstrap_password_change_prompt) from .logs/progress.json if present.
+    """
+    if not progress_path.exists():
+        return None, None, None
     try:
         import json
 
         data = json.loads(progress_path.read_text(encoding="utf-8"))
-        return data.get("ssh_config_file")
+        return (
+            data.get("bootstrap_method"),
+            data.get("bootstrap_tool"),
+            data.get("bootstrap_password_change_prompt"),
+        )
     except Exception:
-        return None
+        return None, None, None
 
 
 def _safe_slug(s: str) -> str:
@@ -515,7 +539,7 @@ def main() -> int:
         rc, parsed_sim_id, parsed_sim_name = _run_deploy(test, extra_env=extra_env, dry_run=args.dry_run)
         test_elapsed = time.time() - test_start_time
         test_timings.append((test.key, test_elapsed))
-        bootstrap_method = _read_progress_bootstrap_method(PROGRESS_JSON)
+        bootstrap_method, bootstrap_tool, bootstrap_pwchange = _read_progress_bootstrap_details(PROGRESS_JSON)
 
         ok = (rc == 0)
         status = "SUCCESS" if ok else f"FAIL(rc={rc})"
@@ -529,7 +553,10 @@ def main() -> int:
             f"[{_now()}] {test.key} {status} | elapsed={_format_elapsed(test_elapsed)} | bcm={test.bcm_version} | sim_name={sim_name or 'n/a'}",
         )
         if bootstrap_method:
-            _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} bootstrap_method={bootstrap_method}")
+            _append_line(
+                SUMMARY_LOG,
+                f"[{_now()}] {test.key} bootstrap_method={bootstrap_method} bootstrap_tool={bootstrap_tool} password_change_prompt={bootstrap_pwchange}",
+            )
 
         if not args.dry_run:
             # If test failed, download logs BEFORE any cleanup.
