@@ -1281,6 +1281,25 @@ class AirBCMDeployer:
                 print(f"  Response: {response.text}")
         except Exception as e:
             print(f"  Warning: Error starting simulation: {e}")
+
+    def get_simulation_state(self) -> str | None:
+        """
+        Best-effort fetch of current simulation state.
+        Returns e.g. NEW/STORED/LOADED/RUNNING/ERROR or None on failure.
+        """
+        if not getattr(self, "simulation_id", None):
+            return None
+        try:
+            r = requests.get(
+                f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/",
+                headers=self.headers,
+                timeout=30,
+            )
+            if r.status_code == 200:
+                return (r.json() or {}).get("state")
+        except Exception:
+            return None
+        return None
     
     def wait_for_simulation_loaded(self, timeout=300):
         """
@@ -3278,14 +3297,32 @@ Examples:
             print(f"  [resume] Cloud-init configured: {cloudinit_success}")
         else:
             cloudinit_success = deployer.configure_node_passwords_cloudinit()
+            # In --sim-id mode, cloud-init assignment is unlikely to take effect unless nodes reboot/rebuild.
+            # We still attempt assignment (it is cheap), but we should not treat it as "passwords configured"
+            # when the simulation is already running.
+            if args.sim_id:
+                state = deployer.get_simulation_state()
+                if state and str(state).upper() in ("LOADED", "RUNNING") and cloudinit_success and not args.skip_cloud_init:
+                    print("\nℹ Simulation is already running/loaded; cloud-init changes will not apply until nodes reboot/rebuild.")
+                    print("ℹ Falling back to SSH bootstrap for this run (or re-run with --skip-cloud-init).")
+                    cloudinit_success = False
             progress.complete_step('cloudinit_configured', cloudinit_success=cloudinit_success)
         
         # Step: Start simulation
         if args.resume and progress.is_step_completed('simulation_started'):
             print(f"  [resume] Simulation already started")
         else:
-            deployer.start_simulation()
-            progress.complete_step('simulation_started')
+            # In --sim-id mode, the simulation may already be LOADED/RUNNING.
+            # Starting in that state can return 400 ("must be NEW/STORED/ERROR/SNAPSHOT").
+            state = deployer.get_simulation_state()
+            progress.set(simulation_state_before_start=state)
+            if args.sim_id and state and str(state).upper() in ("LOADED", "RUNNING"):
+                print(f"\nℹ Simulation already {state}; skipping start/load steps.")
+                progress.complete_step('simulation_started')
+                progress.complete_step('simulation_loaded')
+            else:
+                deployer.start_simulation()
+                progress.complete_step('simulation_started')
         
         # Step: Wait for simulation loaded
         if args.resume and progress.is_step_completed('simulation_loaded'):
