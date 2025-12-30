@@ -2,7 +2,9 @@
 
 # Automated BCM Deployment on NVIDIA Air
 
-This repository provides automated deployment of Bright Cluster Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
+This repository provides automated deployment of Base Command Manager (BCM) on NVIDIA Air using stock Ubuntu 24.04 images. No custom image creation required - just bring your BCM ISO!
+
+The code in this repo is provided **as-is**, with **no guarantees**. By using this code, you accept responsibility for all risks that may come from using it.
 
 ## Table of Contents
 
@@ -39,7 +41,8 @@ This solution automates the complete BCM deployment process:
 **Tested BCM Versions:**
 | Version | ISO Filename | Status |
 |---------|--------------|--------|
-| BCM 11.0.0 | `bcm-11.0-ubuntu2404.iso` | ✓ Tested |
+| BCM 11.31.0 | `bcm-11.31.0-ubuntu2404.iso` | ✓ Tested |
+| BCM 11.30.0 | `bcm-11.30.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.30.0 | `bcm-10.30.0-ubuntu2404.iso` | ✓ Tested |
 | BCM 10.25.03 | `bcm-10.25.03-ubuntu2404.iso` | ✓ Tested |
 
@@ -47,8 +50,7 @@ This solution automates the complete BCM deployment process:
 - [brightcomputing.installer100](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer100/) - Ansible Galaxy collection for BCM 10.x
 - [brightcomputing.installer110](https://galaxy.ansible.com/ui/repo/published/brightcomputing/installer110/) - Ansible Galaxy collection for BCM 11.x
 
-**External Repository (cloned during install):**
-- [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) - Ansible scaffolding for BCM installation
+The installation script is fully self-contained - all Ansible scaffolding is generated inline on the remote host.
 
 ## Quick Start
 
@@ -97,11 +99,15 @@ cp sample-configs/env.example .env
 
 # Edit .env with your actual credentials
 # Required fields:
-#   AIR_API_TOKEN - Your API token from Air
-#   AIR_USERNAME - Your Air account email
-#   AIR_API_URL - https://air.nvidia.com
-#   BCM_PRODUCT_KEY - Your BCM license key
-#   BCM_ADMIN_EMAIL - Admin email for BCM
+#   AIR_API_TOKEN     - Your API token from Air
+#   AIR_USERNAME      - Your Air account email
+#   BCM_PRODUCT_KEY   - Your BCM license key
+#
+# Optional (if you need to override defaults):
+#   AIR_API_URL       - Defaults to https://air.nvidia.com
+#   SSH_PRIVATE_KEY   - Defaults to ~/.ssh/id_rsa
+#   SSH_PUBLIC_KEY    - Defaults to ~/.ssh/id_rsa.pub
+#   BCM_ADMIN_EMAIL   - Defaults to AIR_USERNAME
 ```
 
 **Example `.env` file:**
@@ -113,7 +119,7 @@ BCM_PRODUCT_KEY=123456-789012-345678-901234-567890
 BCM_ADMIN_EMAIL=your_email@nvidia.com
 ```
 
-> **⚠️ License MAC Address:** BCM licenses are bound to the MAC address of the head node's outbound interface. The default topology (`topologies/default.json`) sets a static MAC address to ensure your license works consistently across simulation rebuilds. If you need to use a different MAC (to match an existing license), update the `mac` field on the BCM node's outbound interface in your topology file.
+> **⚠️ License MAC Address:** BCM licenses are bound to the MAC address of the head node's outbound interface. The default topology (`topologies/default/topology.json`) sets a static MAC address to ensure your license works consistently across simulation rebuilds. If you need to use a different MAC (to match an existing license), update the `mac` field on the BCM node's outbound interface in your topology file.
 
 6. Place your BCM ISO file:
 ```bash
@@ -141,7 +147,17 @@ The script auto-detects ISO files based on filename patterns. Supported formats:
 - Use `--bcm-version 10.25.03` or `--bcm-version 10.30.0` to select the specific release
 - In non-interactive mode (`-y`), you must specify the exact version if multiple ISOs exist
 
-8. **(Optional)** Verify your setup:
+8. **(Possibly Needed)** Install `expect`:
+```bash
+sudo apt update
+sudo apt install expect
+```
+
+**Note:** Sometimes there are issues using cloud-init to change the default passwords, copy the SSH key, etc. If an error is encountered creating or applying the cloud-init configuration, `deploy_bcm_air.py` will automatically fall back to using `expect` to complete these tasks via SSH.
+
+In some cases, you may not see an error at the cloud-init step, and instead the simulation may go into an **ERROR** state when it tries to load. If you see this, please try again with `./deploy_bcm_air.py --skip-cloud-init` to go directly to the SSH/expect setup method.
+
+9. **(Optional)** Verify your setup:
 ```bash
 python scripts/check_setup.py
 ```
@@ -163,9 +179,10 @@ The script will:
 4. Wait for simulation to load and nodes to boot
 5. Upload your BCM ISO to the head node via rsync (~10-20 min for 5GB)
 6. Execute BCM installation script on head node (~30-45 min)
-   - Clones bcm-ansible-installer from GitHub
+   - Creates Ansible scaffolding (playbook, inventory, configs)
    - Installs Ansible Galaxy collection
    - Runs official BCM installation playbook
+7. Run post-install features (if configured in topology)
 7. Configure passwords, DNS, and TFTP
 
 **That's it!** You can work on other things while it installs - the script runs unattended after ISO upload.
@@ -245,7 +262,7 @@ cmsh
 
 ## Network Topology
 
-The default topology (`topologies/default.json`) creates the following environment:
+The default topology (`topologies/default/`) creates the following environment:
 
 | Node name        | Interface | IP address        | Function          |
 | ---------------- | --------- | ----------------- | ----------------- |
@@ -271,12 +288,16 @@ The default topology (`topologies/default.json`) creates the following environme
 
 **Scripts:**
 - `scripts/bcm_install.sh` - BCM installation script (runs on head node)
-  - Clones bcm-ansible-installer from GitHub
+  - Creates all Ansible scaffolding inline (self-contained)
   - Generates cluster credentials and settings
   - Runs official BCM Ansible playbook locally
 
 **Topologies:**
-- `topologies/default.json` - Default BCM lab topology (JSON format)
+- `topologies/default/` - Default BCM lab topology with post-install features
+  - `topology.json` - NVIDIA Air topology definition
+  - `features.yaml` - Post-install feature configuration
+  - `scripts/` - ZTP and provisioning scripts
+  - `bcm-config/` - BCM cmsh scripts for post-install
 - `topologies/README.md` - Topology design requirements and documentation
 
 **ISO Directory:**
@@ -302,8 +323,10 @@ Create custom topologies using the NVIDIA Air web UI and export them to JSON for
 
 1. **Create in NVIDIA Air Web UI**: Use the visual topology editor at air.nvidia.com
 2. **Export to JSON**: Use the export function to download the topology as JSON
-3. **Place in `topologies/` directory**: Save the JSON file in this directory
-4. **Deploy**: Run `python deploy_bcm_air.py --topology topologies/your-topology.json`
+3. **Create topology directory**: Create a new directory under `topologies/` (e.g., `topologies/my-topology/`)
+4. **Save as `topology.json`**: Place the exported JSON in your topology directory
+5. **Configure features** (optional): Create a `features.yaml` file to enable post-install configurations
+6. **Deploy**: Run `python deploy_bcm_air.py --topology topologies/my-topology`
 
 ### Design Requirements
 
@@ -338,7 +361,10 @@ BCM licenses are bound to MAC addresses. Keep the MAC address on your BCM node's
 ### Using Your Custom Topology
 
 ```bash
-# Deploy with custom topology
+# Deploy with custom topology directory
+python deploy_bcm_air.py --topology topologies/my-topology
+
+# Or legacy JSON file (without features support)
 python deploy_bcm_air.py --topology topologies/my-topology.json
 ```
 
@@ -586,7 +612,7 @@ pip install -r requirements.txt
 ## Additional Resources
 
 - [NVIDIA Air Documentation](https://docs.nvidia.com/networking-ethernet-software/nvidia-air/)
-- [Bright Cluster Manager Documentation](https://www.brightcomputing.com/documentation)
+- [Base Command Manager Documentation](https://www.brightcomputing.com/documentation)
 - [Ansible Galaxy - BCM 10.x Collection](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm100/)
 - [Ansible Galaxy - BCM 11.x Collection](https://galaxy.ansible.com/ui/repo/published/brightcomputing/bcm110/)
 
@@ -609,8 +635,8 @@ python deploy_bcm_air.py --bcm-version 11
 python deploy_bcm_air.py --bcm-version 10.30.0
 python deploy_bcm_air.py --bcm-version 10.25.03
 
-# Use custom topology file
-python deploy_bcm_air.py --topology topologies/my-topology.json
+# Use custom topology directory
+python deploy_bcm_air.py --topology topologies/my-topology
 
 # Resume from last checkpoint
 python deploy_bcm_air.py --resume
@@ -625,7 +651,10 @@ All configuration is managed through a `.env` file in the project root. Copy `sa
 
 - `AIR_API_TOKEN` - Your NVIDIA Air API authentication token (required)
 - `AIR_USERNAME` - Your Air account email address (required)
-- `AIR_API_URL` - NVIDIA Air API base URL: `https://air.nvidia.com` (required)
+- `BCM_PRODUCT_KEY` - Your BCM license key (required)
+- `AIR_API_URL` - NVIDIA Air API base URL: `https://air.nvidia.com` (optional; defaults to external Air)
+- `SSH_PRIVATE_KEY` - Path to your SSH private key (optional; defaults to `~/.ssh/id_rsa`)
+- `SSH_PUBLIC_KEY` - Path to your SSH public key (optional; defaults to `~/.ssh/id_rsa.pub`)
 - `UV_LINK_MODE` - Set to `copy` to suppress hardlink warnings in WSL (optional)
 
 ## Repository Structure
@@ -636,11 +665,6 @@ bcm-in-nvidia-air/
 ├── README.md                      # This file
 ├── .env                           # Your environment config (create from sample-configs/env.example)
 ├── cloud-init-password.yaml       # Your config with SSH key (auto-generated)
-│
-├── # bcm-ansible-installer is cloned on remote host from:
-│   # https://github.com/twilson217/bcm-ansible-installer
-│   ├── ansible.cfg                # Ansible configuration
-│   └── requirements-control-node.txt  # Python dependencies for Ansible
 │
 ├── sample-configs/                # Example configuration templates
 │   ├── env.example                # Example environment configuration
@@ -740,8 +764,11 @@ User Machine                     SSH Proxy                    bcm-01 (head node)
 
 [Step 5] Verify BCM ISO exists
 
-[Step 6] git clone bcm-ansible-installer
-    └── https://github.com/twilson217/bcm-ansible-installer
+[Step 6] Create Ansible scaffolding (inline)
+    ├── ansible.cfg
+    ├── playbook.yml
+    ├── inventory/hosts
+    └── requirements-control-node.txt
     
 [Step 7] ansible-galaxy collection install
     └── brightcomputing.installer100 (BCM 10.x)
@@ -763,20 +790,24 @@ User Machine                     SSH Proxy                    bcm-01 (head node)
 
 ### Timeline
 
-| Time | Milestone |
-|------|-----------|
-| 0 min | Start deployment |
-| 1 min | Simulation created & starting |
-| 5 min | Simulation loaded, SSH enabled |
-| 15-25 min | ISO upload complete |
-| 55-70 min | BCM installation complete |
+| Phase | Duration | Description |
+|-------|----------|-------------|
+| Create simulation | ~1 min | API call to create and configure simulation |
+| Start & load | ~4 min | Boot VMs, wait for simulation to be ready |
+| Enable SSH | ~1 min | Create SSH service, verify connectivity |
+| Upload ISO | 7-25 min | Transfer BCM ISO to head node (varies by size) |
+| Run Ansible | 10-25 min | BCM installation via Ansible playbook |
+| **Estimated Total** | **25-55 min** | **End-to-end deployment time** |
+
+*ISO upload times vary by version: BCM 10.30.0 (~5GB) ≈ 7-10 min, BCM 10.25.03 (~7GB) ≈ 10-14 min, BCM 11.x (~13GB) ≈ 19-25 min.*
 
 ### Key Components
 
-**bcm-ansible-installer Repository:**
-The [bcm-ansible-installer](https://github.com/twilson217/bcm-ansible-installer) repo is cloned on the remote host (not uploaded) and provides minimal scaffolding:
+**Ansible Scaffolding:**
+The install script creates all Ansible files inline on the remote host:
 - `playbook.yml` - Calls the Galaxy collection role
 - `inventory/hosts` - Defines head_node target
+- `ansible.cfg` - Ansible configuration
 - `requirements-control-node.txt` - Python dependencies
 - `ansible.cfg` - Ansible configuration
 

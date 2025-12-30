@@ -63,11 +63,15 @@ echo "  Upgrading system packages..."
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y -qq
 
 # Ensure we never keep both libglapi-amber and libglapi-mesa installed together.
-# On Ubuntu 24.04 these can conflict and leave apt in a broken state.
+# On Ubuntu 24.04 these packages conflict. We standardize on libglapi-mesa.
 echo "  Checking for libglapi-amber/libglapi-mesa conflicts..."
 if dpkg -s libglapi-amber >/dev/null 2>&1 && dpkg -s libglapi-mesa >/dev/null 2>&1; then
-    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-mesa..."
-    apt-get remove -y -qq libglapi-mesa >/dev/null 2>&1 || true
+    echo "  ⚠ Both libglapi-amber and libglapi-mesa are installed; removing libglapi-amber..."
+    apt-get remove -y -qq libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
+elif dpkg -s libglapi-amber >/dev/null 2>&1; then
+    # Only amber is installed - remove it to make way for mesa
+    echo "  ⚠ libglapi-amber installed; removing to standardize on libglapi-mesa..."
+    apt-get remove -y -qq libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
 fi
 
 # Fix any broken dependencies
@@ -76,55 +80,6 @@ apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y -qq python3 python3-pip python3-venv git mysql-server rsync libldap2-dev libsasl2-dev
 pip3 install --quiet --break-system-packages PyMySQL python-ldap
 echo "  ✓ Dependencies installed"
-
-# Workaround for Ubuntu 24.04 package conflict (BCM 10.24.x only)
-# libglapi-amber and libglapi-mesa are mutually exclusive
-# The BCM 10.24.x Ansible role tries to install packages requiring both
-# Solution: Create dummy libglapi-mesa FIRST, then install libglapi-amber
-if [[ "$BCM_FULL_VERSION" == 10.24* ]] || [[ "$BCM_FULL_VERSION" == 10.2[0-3]* ]]; then
-    echo "  Applying Ubuntu 24.04 package conflict workaround for BCM ${BCM_FULL_VERSION}..."
-    
-    # Step 1: Install equivs to create dummy packages
-    apt-get install -y equivs >/dev/null 2>&1
-    
-    # Step 2: Create dummy libglapi-mesa package FIRST
-    # This satisfies any dependency on libglapi-mesa without the actual package
-    mkdir -p /tmp/dummy-pkg
-    cat > /tmp/dummy-pkg/libglapi-mesa << 'CTRLEOF'
-Section: libs
-Priority: optional
-Standards-Version: 3.9.2
-
-Package: libglapi-mesa
-Version: 99.0.0
-Provides: libglapi-mesa
-Replaces: libglapi-mesa
-Conflicts: libglapi-mesa
-Description: Dummy package to satisfy BCM 10.24.x dependency
- Prevents real libglapi-mesa from being installed (conflicts with libglapi-amber).
-CTRLEOF
-    
-    cd /tmp/dummy-pkg
-    equivs-build libglapi-mesa >/dev/null 2>&1
-    dpkg -i libglapi-mesa_99.0.0_all.deb >/dev/null 2>&1 || true
-    cd - >/dev/null
-    echo "  ✓ Dummy libglapi-mesa installed (satisfies dependency)"
-    
-    # Step 3: Now install libglapi-amber (won't conflict with our dummy)
-    apt-get install -y libglapi-amber libgl1-amber-dri >/dev/null 2>&1 || true
-    echo "  ✓ libglapi-amber installed"
-    
-    # Step 4: Pre-install problematic packages without version constraints
-    echo "  Pre-installing packages with version mismatches..."
-    apt-get install -y libxml2-dev libxslt1-dev libuser1 libicu-dev >/dev/null 2>&1 || true
-    
-    # Step 5: Fix any broken deps after our workaround
-    apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --fix-broken install -y -qq || true
-    
-    echo "  ✓ Package conflict workaround applied"
-else
-    echo "  ℹ BCM ${BCM_FULL_VERSION} - no package workaround needed"
-fi
 
 # Step 4: Secure MySQL installation
 echo "[Step 4/10] Securing MySQL..."
@@ -154,27 +109,62 @@ if [ ! -f "$BCM_ISO_PATH" ]; then
 fi
 echo "  ✓ ISO found at $BCM_ISO_PATH (Ansible will handle mounting)"
 
-# Step 6: Clone/setup BCM Ansible installer
+# Step 6: Create BCM Ansible installer (self-contained, no external repo needed)
 echo "[Step 6/10] Setting up BCM Ansible installer..."
-BCM_INSTALLER_REPO="https://github.com/twilson217/bcm-ansible-installer.git"
+BCM_INSTALLER_DIR="/home/ubuntu/bcm-ansible-installer"
+mkdir -p "${BCM_INSTALLER_DIR}/inventory"
+mkdir -p "${BCM_INSTALLER_DIR}/group_vars/head_node"
+cd "${BCM_INSTALLER_DIR}"
 
-if [ ! -d /home/ubuntu/bcm-ansible-installer ]; then
-    echo "  Cloning bcm-ansible-installer from GitHub..."
-    git clone "$BCM_INSTALLER_REPO" /home/ubuntu/bcm-ansible-installer
-    if [ $? -ne 0 ]; then
-        echo "  ✗ ERROR: Failed to clone bcm-ansible-installer"
-        exit 1
-    fi
-    echo "  ✓ Repository cloned"
-else
-    echo "  ✓ bcm-ansible-installer already exists"
-fi
-cd /home/ubuntu/bcm-ansible-installer
+# Create ansible.cfg
+cat > ansible.cfg <<'ANSIBLECFG'
+[defaults]
+host_key_checking = False
+inventory = inventory/hosts
+deprecation_warnings = False
+interpreter_python = auto_silent
 
-# Fix playbook to use correct BCM version role
-sed -i "s/brightcomputing\.installer110\.head_node/${BCM_ROLE}/g" playbook.yml
-sed -i "s/brightcomputing\.installer100\.head_node/${BCM_ROLE}/g" playbook.yml
-echo "  ✓ Playbook configured for ${BCM_ROLE}"
+[privilege_escalation]
+become = True
+become_method = sudo
+become_user = root
+ANSIBLECFG
+echo "  ✓ ansible.cfg created"
+
+# Create inventory/hosts
+cat > inventory/hosts <<'INVENTORY'
+[head_node]
+localhost ansible_connection=local
+INVENTORY
+echo "  ✓ inventory/hosts created"
+
+# Create requirements-control-node.txt
+# The Bright installer docs require Ansible 8.3+ for local/control-node runs.
+# Use the full 'ansible' package (includes ansible-core) to match the typical
+# Bright installer expectations and reduce surprises vs ansible-core-only installs.
+cat > requirements-control-node.txt <<'REQUIREMENTS'
+jmespath==0.10.0
+xmltodict==0.12.0
+netaddr
+paramiko
+ansible==8.6.*
+REQUIREMENTS
+echo "  ✓ requirements-control-node.txt created (ansible==8.6.*)"
+
+# Create playbook.yml with the correct role for this BCM version
+cat > playbook.yml <<PLAYBOOK
+---
+- name: Install BCM Head Node
+  hosts: head_node
+  become: true
+  roles:
+    - ${BCM_ROLE}
+  tasks:
+    - name: Include post install user tasks
+      include_tasks: post_install_user_tasks.yml
+      when: post_install_user_tasks is defined or (lookup('file', 'post_install_user_tasks.yml', errors='ignore') | length > 0)
+PLAYBOOK
+echo "  ✓ playbook.yml created for ${BCM_ROLE}"
 
 # Create Python virtual environment
 python3 -m venv venv
@@ -185,16 +175,66 @@ echo "  ✓ Ansible installer ready"
 # Step 7: Install BCM Ansible Galaxy collection
 echo "[Step 7/10] Installing Ansible Galaxy collection: ${BCM_COLLECTION}..."
 export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
-# Install our specific collection version (not whatever is in requirements.yml)
+# Install required Ansible collections.
+#
+# NOTE: The Bright installer roles use modules from community collections like:
+#   - community.general.alternatives
+# If these collections are not installed, ansible-playbook fails early with:
+#   ERROR! couldn't resolve module/action 'community.general.alternatives'
+#
+# Since v0.7.0 generates the scaffolding inline (no external requirements.yml),
+# we must install these explicitly.
 ansible-galaxy collection install "${BCM_COLLECTION}" --force
-echo "  ✓ Collection installed: ${BCM_COLLECTION}"
+ansible-galaxy collection install community.general --force
+ansible-galaxy collection install community.mysql --force
+ansible-galaxy collection install community.crypto --force
+echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general, community.mysql, community.crypto"
+
+apply_collection_version_patch() {
+    local col_dir=""
+    local patch_file="/home/ubuntu/bcm_patches/${BCM_FULL_VERSION}.py"
+
+    # Collection can be installed under root or ubuntu, depending on how this script is executed.
+    local candidates=(
+        "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+    )
+
+    # No patch for this BCM full version -> nothing to do.
+    if [ ! -f "${patch_file}" ]; then
+        echo "  ℹ No collection patch for BCM ${BCM_FULL_VERSION}"
+        return 0
+    fi
+
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            col_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$col_dir" ]; then
+        echo "  ✗ ERROR: Patch exists (${patch_file}) but collection dir was not found for ${BCM_COLLECTION}"
+        return 1
+    fi
+
+    echo "  Applying collection patch: ${patch_file}"
+    python3 "${patch_file}" --collection-dir "${col_dir}" || {
+        echo "  ✗ ERROR: Collection patch failed: ${patch_file}"
+        return 1
+    }
+    echo "  ✓ Collection patch applied"
+}
+
+# Apply any per-version patches to the installed collection (if present)
+apply_collection_version_patch || exit 1
 
 #
-# BCM 10.24.x on Ubuntu 24.04:
-# The installer100 collection may attempt to install libglapi-mesa alongside libglapi-amber.
-# Those packages conflict (mutually exclusive) on Ubuntu 24.04. To prevent this, we patch the
-# installed Ansible collection in-place to remove references to libglapi-mesa before running
-# the playbook.
+# BCM 10.x on Ubuntu 24.04:
+# The installer100 collection references both libglapi-amber and libglapi-mesa packages,
+# which conflict on Ubuntu 24.04. We standardize on libglapi-mesa (used by most BCM installations).
+# This function patches the Ansible collection to remove ONLY YAML list entries for amber packages.
+# It's careful not to remove lines where the package name appears in other contexts (file paths, etc.)
 #
 patch_collection_remove_pkg() {
     local pkg="$1"
@@ -220,25 +260,59 @@ patch_collection_remove_pkg() {
 
     echo "  Patching collection at: ${col_dir}"
 
-    # Find any files referencing the package and remove those lines.
-    # This is intentionally blunt: if the collection is listing the package, we strip it.
-    local files
-    files="$(grep -RIl -- "${pkg}" "${col_dir}" || true)"
-    if [ -z "$files" ]; then
-        echo "  ✓ No ${pkg} references found in collection"
-        return 0
-    fi
+    # Use Python for safer YAML-aware patching
+    # Only removes lines that are YAML list items (- package_name), not other references
+    export PKG_TO_REMOVE="$pkg"
+    export COL_DIR="$col_dir"
+    
+    python3 - <<'PYTHON_PATCH'
+import os
+import re
+from pathlib import Path
 
-    echo "  Removing ${pkg} references from collection files..."
-    while IFS= read -r f; do
-        sed -i "/${pkg}/d" "$f" || true
-    done <<< "$files"
+pkg = os.environ.get("PKG_TO_REMOVE", "")
+col_dir = Path(os.environ.get("COL_DIR", ""))
 
-    if grep -RIl -- "${pkg}" "${col_dir}" >/dev/null 2>&1; then
-        echo "  ⚠ ${pkg} still referenced after patch (continuing anyway)"
-    else
-        echo "  ✓ ${pkg} successfully removed from collection"
-    fi
+if not pkg or not col_dir.exists():
+    print(f"  ⚠ Invalid patch parameters")
+    exit(0)
+
+# Pattern to match YAML list items containing the package
+# Matches: "  - libglapi-amber" or "- libglapi-amber" (with optional quotes)
+yaml_list_pattern = re.compile(
+    rf'^(\s*-\s*)["\']?{re.escape(pkg)}["\']?\s*(#.*)?$',
+    re.MULTILINE
+)
+
+files_patched = 0
+lines_removed = 0
+
+# Only look at YAML files in vars/ and defaults/ directories (package lists)
+for subdir in ["vars", "defaults", "roles/*/vars", "roles/*/defaults"]:
+    for yml_file in list(col_dir.glob(f"**/{subdir}/*.yml")) + list(col_dir.glob(f"**/{subdir}/*.yaml")):
+        try:
+            content = yml_file.read_text(encoding="utf-8", errors="ignore")
+            
+            # Count matches before removal
+            matches = yaml_list_pattern.findall(content)
+            if matches:
+                # Remove matching lines (only YAML list items)
+                new_content = yaml_list_pattern.sub("", content)
+                # Clean up any resulting double newlines
+                new_content = re.sub(r'\n\n\n+', '\n\n', new_content)
+                
+                if new_content != content:
+                    yml_file.write_text(new_content, encoding="utf-8")
+                    files_patched += 1
+                    lines_removed += len(matches)
+        except Exception as e:
+            pass  # Best effort
+
+if lines_removed > 0:
+    print(f"  ✓ Removed {lines_removed} {pkg} entries from {files_patched} file(s)")
+else:
+    print(f"  ✓ No {pkg} YAML list entries found in collection")
+PYTHON_PATCH
 }
 
 patch_collection_insert_ignore_errors_for_task() {
@@ -331,11 +405,170 @@ for p in files:
 PY
 }
 
+patch_collection_add_retries_for_license_url() {
+    local license_url="http://licensing.brightcomputing.com/licensing/index.cgi"
+    local col_dir=""
+
+    local candidates=(
+        "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+    )
+
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            col_dir="$d"
+            break
+        fi
+    done
+
+    if [ -z "$col_dir" ]; then
+        echo "  ⚠ Could not locate installed Ansible collection directory for ${BCM_COLLECTION}"
+        return 0
+    fi
+
+    echo "  Patching licensing URI task to add retries/delay (transient network tolerance)..."
+    export LICENSE_URL="${license_url}"
+    export COL_DIR="${col_dir}"
+
+    python3 - <<'PY'
+import os
+import re
+from pathlib import Path
+
+license_url = os.environ.get("LICENSE_URL", "")
+col_dir = Path(os.environ.get("COL_DIR", ""))
+
+if not license_url or not col_dir.exists():
+    print("  ⚠ Invalid patch parameters for licensing retry patch")
+    raise SystemExit(0)
+
+task_name_re = re.compile(r'^(\s*)-\s+name\s*:\s*.*$')
+register_re = re.compile(r'^\s*register\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\s*$')
+
+def patch_file(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+
+    if license_url not in text:
+        return False
+
+    lines = text.splitlines(True)
+    changed = False
+
+    # Find all occurrences and patch their containing task blocks.
+    idxs = [i for i, ln in enumerate(lines) if license_url in ln]
+    patched_task_starts = set()
+
+    for hit_i in idxs:
+        # Find the task start (nearest preceding "- name:" line).
+        start = None
+        start_indent = None
+        for j in range(hit_i, -1, -1):
+            m = task_name_re.match(lines[j])
+            if m:
+                start = j
+                start_indent = len(m.group(1))
+                break
+        if start is None:
+            continue
+        if start in patched_task_starts:
+            continue
+
+        # Find the task end (next "- name:" at same indentation).
+        end = len(lines)
+        for j in range(start + 1, len(lines)):
+            m = task_name_re.match(lines[j])
+            if m and len(m.group(1)) == start_indent:
+                end = j
+                break
+
+        block = lines[start:end]
+        block_text = "".join(block)
+
+        # If this task already has retries/until/delay, skip (idempotent).
+        if re.search(r'^\s*retries\s*:\s*\d+\s*$', block_text, re.MULTILINE) and re.search(
+            r'^\s*until\s*:\s*', block_text, re.MULTILINE
+        ):
+            patched_task_starts.add(start)
+            continue
+
+        # Determine indentation for task attributes (align with other keys under the task).
+        attr_indent = " " * (start_indent + 2)
+
+        # Determine a register var for this task.
+        reg_var = None
+        for ln in block:
+            m = register_re.match(ln)
+            if m:
+                reg_var = m.group(1)
+                break
+        if not reg_var:
+            reg_var = "bcm_license_request"
+
+        # Build insert lines (only insert missing ones).
+        insert = []
+        if not re.search(r'^\s*register\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}register: {reg_var}\n")
+        if not re.search(r'^\s*retries\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}retries: 12\n")
+        if not re.search(r'^\s*delay\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}delay: 10\n")
+        if not re.search(r'^\s*until\s*:\s*', block_text, re.MULTILINE):
+            insert.append(f"{attr_indent}until: {reg_var}.status == 200\n")
+
+        if insert:
+            # Insert at end of task block, right before the next task starts.
+            lines[end:end] = insert + (["\n"] if (end < len(lines) and not lines[end - 1].endswith("\n\n")) else [])
+            changed = True
+
+        patched_task_starts.add(start)
+
+    if changed:
+        try:
+            path.write_text("".join(lines), encoding="utf-8")
+        except Exception:
+            return False
+
+    return changed
+
+
+files_changed = 0
+files_scanned = 0
+
+for yml in col_dir.rglob("*.yml"):
+    files_scanned += 1
+    if patch_file(yml):
+        files_changed += 1
+
+for yml in col_dir.rglob("*.yaml"):
+    files_scanned += 1
+    if patch_file(yml):
+        files_changed += 1
+
+if files_changed:
+    print(f"  ✓ Added retries/delay/until to licensing URI task in {files_changed} file(s)")
+else:
+    # Best-effort: not all installers hit licensing, or the URL may differ by version.
+    print(f"  ℹ No licensing URL task found to patch under {col_dir} (scanned {files_scanned} YAML files)")
+PY
+}
+
+# BCM 10.x on Ubuntu 24.04: The installer100 collection references both libglapi-amber
+# and libglapi-mesa which conflict. We standardize on libglapi-mesa, so we remove
+# amber package references from the collection's package lists.
 if [ "$BCM_VERSION" == "10" ]; then
-    echo "  Applying Ansible collection patch (prevent libglapi-mesa install)..."
-    patch_collection_remove_pkg "libglapi-mesa"
+    echo "  Applying Ansible collection patch (standardize on libglapi-mesa)..."
+    patch_collection_remove_pkg "libglapi-amber"
+    patch_collection_remove_pkg "libgl1-amber-dri"
 else
-    echo "  Skipping libglapi-mesa collection patch for BCM ${BCM_VERSION} (installer110)"
+    echo "  Skipping libglapi collection patch for BCM ${BCM_VERSION} (installer110)"
+fi
+
+# BCM 10.x: tolerate transient DNS/network hiccups during licensing HTTP request
+if [ "$BCM_VERSION" == "10" ]; then
+    patch_collection_add_retries_for_license_url
 fi
 
 # Workaround for observed crashes during certificate generation (rc=-11 / SIGSEGV)
@@ -385,6 +618,14 @@ timezone: UTC
 # Workaround: prevent software-image creation from installing both libglapi-amber and libglapi-mesa.
 # On Ubuntu 24.04, libglapi-amber conflicts with libglapi-mesa. The installer’s cm-create-image
 # distro package list includes both mesa and amber-dri; excluding amber-dri avoids the conflict.
+#
+# Also exclude amber packages from the HEAD NODE distro package install step.
+# Without this, installer100 may try to install libgl1-amber-dri (pulling libglapi-amber)
+# while libglapi-mesa is present, causing:
+#   libglapi-amber : Breaks: libglapi-mesa
+exclude_distribution_packages:
+  - libgl1-amber-dri
+  - libglapi-amber
 exclude_software_images_distro_packages:
   - libgl1-amber-dri
   - libglapi-amber
@@ -453,6 +694,36 @@ fi
 
 # Step 10: Post-installation configuration
 echo "[Step 10/10] Post-installation configuration..."
+
+# Ensure ISO is mounted (Ansible may have unmounted it)
+if ! mountpoint -q "${BCM_MOUNT_PATH}"; then
+    echo "  Re-mounting ISO..."
+    mkdir -p "${BCM_MOUNT_PATH}"
+    if mount -o loop "${BCM_ISO_PATH}" "${BCM_MOUNT_PATH}" 2>/dev/null; then
+        echo "  ✓ ISO mounted at ${BCM_MOUNT_PATH}"
+    else
+        echo "  ⚠ Could not mount ISO, some post-install steps may be skipped"
+    fi
+else
+    echo "  ✓ ISO already mounted at ${BCM_MOUNT_PATH}"
+fi
+
+# Install BCM apt repositories from the ISO
+# These packages set up the BCM apt sources for future package installations
+# Package location: /mnt/dvd/data/packages/<VERSION>/ubuntu/2404/all/cm-config-apt*.deb
+echo "  Installing BCM apt repositories..."
+BCM_APT_PKGS="${BCM_MOUNT_PATH}/data/packages/${BCM_FULL_VERSION}/ubuntu/2404/all/cm-config-apt*.deb"
+if compgen -G "${BCM_APT_PKGS}" > /dev/null 2>&1; then
+    # Use apt install with the glob pattern to install all matching packages
+    apt-get install -y -qq ${BCM_APT_PKGS} 2>&1 || {
+        echo "  ⚠ Failed to install apt repos, trying dpkg..."
+        dpkg -i ${BCM_APT_PKGS} 2>/dev/null || true
+    }
+    echo "  ✓ BCM apt repositories installed"
+else
+    echo "  ⚠ No cm-config-apt packages found at: ${BCM_APT_PKGS}"
+    echo "    (This is expected for some BCM versions or ISO layouts)"
+fi
 
 # Enable TFTP for PXE boot
 systemctl enable tftpd.socket 2>/dev/null || true

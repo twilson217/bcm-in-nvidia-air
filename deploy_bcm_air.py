@@ -2,7 +2,7 @@
 """
 NVIDIA Air BCM Deployment Automation
 
-This script automates the deployment of Bright Cluster Manager (BCM) on NVIDIA Air
+This script automates the deployment of Base Command Manager (BCM) on NVIDIA Air
 using stock Ubuntu 24.04 images and Ansible Galaxy playbooks.
 """
 
@@ -18,8 +18,33 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+try:
+    import yaml
+except ImportError:
+    yaml = None  # Optional: features.yaml support requires PyYAML
+
 # Load environment variables from .env file
 load_dotenv()
+
+def _local_namespace() -> str | None:
+    """
+    Optional namespace for local, on-disk artifacts (logs, progress, default ssh configs).
+    Intended for separating artifacts across different .env files (e.g. external vs internal).
+    """
+    ns = (os.getenv("LOCAL_NAMESPACE") or "").strip()
+    return ns or None
+
+
+def _local_log_dir() -> Path:
+    base = Path(__file__).parent / ".logs"
+    ns = _local_namespace()
+    return (base / ns) if ns else base
+
+
+def _local_ssh_dir() -> Path:
+    base = Path(__file__).parent / ".ssh"
+    ns = _local_namespace()
+    return (base / ns) if ns else base
 
 
 class ProgressTracker:
@@ -38,11 +63,12 @@ class ProgressTracker:
         'node_ready',
         'ssh_configured',
         'bcm_installed',
+        'features_configured',
         'completed'
     ]
     
     def __init__(self, log_dir=None):
-        self.log_dir = Path(log_dir) if log_dir else Path(__file__).parent / '.logs'
+        self.log_dir = Path(log_dir) if log_dir else _local_log_dir()
         self.progress_file = self.log_dir / 'progress.json'
         self.data = self._load()
     
@@ -91,6 +117,13 @@ class ProgressTracker:
     def get(self, key, default=None):
         """Get a stored value"""
         return self.data.get(key, default)
+
+    def set(self, **kwargs):
+        """Store arbitrary metadata without advancing the last_step."""
+        for key, value in kwargs.items():
+            self.data[key] = value
+        self.data['last_updated'] = datetime.now().isoformat()
+        self._save()
     
     def clear(self):
         """Clear all progress"""
@@ -120,7 +153,10 @@ class AirBCMDeployer:
     """Automate BCM deployment on NVIDIA Air"""
     
     def __init__(self, api_base_url="https://air.nvidia.com", api_token=None, username=None, 
-                 non_interactive=False, progress_tracker=None):
+                 non_interactive=False, progress_tracker=None,
+                 skip_cloud_init: bool = False,
+                 skip_ssh_service: bool = False,
+                 no_sdk: bool = False):
         """
         Initialize the deployer
         
@@ -133,6 +169,10 @@ class AirBCMDeployer:
         """
         self.non_interactive = non_interactive
         self.progress = progress_tracker or ProgressTracker()
+        # Isolation/debug toggles (defaults keep current behavior)
+        self.skip_cloud_init = skip_cloud_init
+        self.skip_ssh_service = skip_ssh_service
+        self.no_sdk = no_sdk
         # Clean up URL - remove trailing slashes and /api/vX
         self.api_base_url = api_base_url.rstrip('/')
         if self.api_base_url.endswith('/api/v2'):
@@ -945,6 +985,8 @@ class AirBCMDeployer:
         
         # Use Air SDK for reliable node listing (same method that works for cloud-init)
         try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
             from air_sdk import AirApi
             air = AirApi(api_url=self.api_base_url, bearer_token=self.jwt_token)
             sim = air.simulations.get(self.simulation_id)
@@ -975,8 +1017,12 @@ class AirBCMDeployer:
                 if not use_sdk:
                     # Fallback to REST API
                     response = requests.get(
-                        f"{self.api_base_url}/api/v2/simulations/{self.simulation_id}/nodes/",
+                        # NOTE: On https://air.nvidia.com, the OpenAPI spec defines node listing as:
+                        #   GET /api/v2/simulations/nodes/?simulation=<simulation_uuid>
+                        # not /api/v2/simulations/<id>/nodes/
+                        f"{self.api_base_url}/api/v2/simulations/nodes/",
                         headers=self.headers,
+                        params={"simulation": self.simulation_id},
                         timeout=30
                     )
                     
@@ -1092,6 +1138,7 @@ class AirBCMDeployer:
         """
         print("\nWaiting for simulation to finish loading...")
         start_time = time.time()
+        last_sim_data = None
         
         while time.time() - start_time < timeout:
             try:
@@ -1103,6 +1150,7 @@ class AirBCMDeployer:
                 
                 if response.status_code == 200:
                     sim_data = response.json()
+                    last_sim_data = sim_data
                     state = sim_data.get('state', 'unknown')
                     print(f"  Simulation state: {state}                    ", end='\r')
                     
@@ -1111,6 +1159,10 @@ class AirBCMDeployer:
                         return True
                     elif state in ['ERROR', 'FAILED']:
                         print(f"\n✗ Simulation failed to load: {state}")
+                        self._dump_simulation_failure_diagnostics(
+                            reason=f"simulation state={state} during load wait",
+                            sim_data=sim_data,
+                        )
                         return False
                 
                 time.sleep(5)
@@ -1119,8 +1171,199 @@ class AirBCMDeployer:
                 time.sleep(5)
         
         print(f"\n⚠ Timeout waiting for simulation to load")
+        self._dump_simulation_failure_diagnostics(
+            reason=f"timeout waiting for LOADED (timeout={timeout}s)",
+            sim_data=last_sim_data,
+        )
         return False
-    
+
+    def _dump_simulation_failure_diagnostics(self, reason: str, sim_data: dict | None = None) -> None:
+        """
+        Best-effort diagnostics dump when a simulation fails to load.
+        Writes a single JSON file into .logs/ with details that often contain the root cause.
+        """
+        try:
+            sim_id = self.simulation_id
+            if not sim_id:
+                return
+
+            # Prefer progress-tracker log_dir, but ensure it's namespaced if LOCAL_NAMESPACE is set.
+            log_dir = getattr(self.progress, "log_dir", None) or _local_log_dir()
+            log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            out_path = log_dir / f"air-sim-failure-{sim_id}-{ts}.json"
+
+            def _get_json(url: str, params: dict | None = None) -> dict:
+                resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+                ct = (resp.headers.get("content-type") or "").lower()
+                if resp.status_code == 200 and "application/json" in ct:
+                    return {"ok": True, "status_code": resp.status_code, "json": resp.json(), "headers": dict(resp.headers)}
+                return {
+                    "ok": False,
+                    "status_code": resp.status_code,
+                    "headers": dict(resp.headers),
+                    "text": (resp.text or "")[:4000],
+                }
+
+            base = self.api_base_url.rstrip("/")
+            diag: dict = {
+                "timestamp": datetime.now().isoformat(),
+                "reason": reason,
+                "api_base_url": base,
+                "simulation_id": sim_id,
+                "simulation_name": getattr(self, "simulation_name", None),
+                "sim_data_from_wait_loop": sim_data,
+                "endpoints": {},
+                "sdk": {"available": False},
+            }
+
+            # SDK (when installed) can expose additional objects/fields and clearer errors than raw REST.
+            # https://docs.nvidia.com/networking-ethernet-software/nvidia-air/Air-Python-SDK/
+            try:
+                if getattr(self, "no_sdk", False):
+                    raise RuntimeError("SDK disabled by --no-sdk")
+                from air_sdk import AirApi  # type: ignore
+
+                air = AirApi(username=self.username, password=self.api_token, api_url=base)
+                diag["sdk"]["available"] = True
+
+                def _sdk_safe(obj, max_len: int = 20000):
+                    try:
+                        if obj is None:
+                            return None
+                        if hasattr(obj, "json") and callable(getattr(obj, "json")):
+                            return obj.json()
+                        # Fall back to repr (truncated)
+                        s = repr(obj)
+                        return s if len(s) <= max_len else s[:max_len] + "..."
+                    except Exception as e:
+                        return {"error": str(e)}
+
+                # Simulation (often includes fields not present in our v2 REST response)
+                try:
+                    sim_obj = air.simulations.get(sim_id)
+                    diag["sdk"]["simulation"] = _sdk_safe(sim_obj)
+                except Exception as e:
+                    diag["sdk"]["simulation_error"] = str(e)
+
+                # Jobs (useful for “capacity/scheduling” failures; filter by simulation when supported)
+                try:
+                    jobs_api = getattr(air, "jobs", None)
+                    if jobs_api and hasattr(jobs_api, "list"):
+                        diag["sdk"]["jobs"] = _sdk_safe(jobs_api.list(simulation=sim_id))
+                except Exception as e:
+                    diag["sdk"]["jobs_error"] = str(e)
+
+                # Simulation nodes (often includes per-node state/error)
+                try:
+                    sim_nodes_api = getattr(air, "simulation_nodes", None)
+                    if sim_nodes_api and hasattr(sim_nodes_api, "list"):
+                        diag["sdk"]["simulation_nodes"] = _sdk_safe(sim_nodes_api.list(simulation=sim_id))
+                except Exception as e:
+                    diag["sdk"]["simulation_nodes_error"] = str(e)
+
+                # Capacity (if available, can immediately explain “can’t place this sim right now”)
+                try:
+                    capacity_api = getattr(air, "capacity", None)
+                    if capacity_api and hasattr(capacity_api, "get"):
+                        diag["sdk"]["capacity"] = _sdk_safe(capacity_api.get())
+                except Exception as e:
+                    diag["sdk"]["capacity_error"] = str(e)
+            except Exception as e:
+                diag["sdk"]["available"] = False
+                diag["sdk"]["import_error"] = str(e)
+
+            # v2 sim details (often contains state_message/error_message)
+            diag["endpoints"]["simulation"] = _get_json(f"{base}/api/v2/simulations/{sim_id}/")
+            # nodes (node-level error_message is very helpful)
+            # NOTE: external air.nvidia.com does not expose /api/v2/simulations/{id}/nodes/
+            # The OpenAPI spec defines /api/v2/simulations/nodes/?simulation=<id>
+            diag["endpoints"]["nodes"] = _get_json(
+                f"{base}/api/v2/simulations/nodes/",
+                params={"simulation": sim_id},
+            )
+            # jobs + events (usually show the failing operation/reason)
+            # NOTE: OpenAPI spec defines /api/v2/jobs/?simulation=<id>
+            diag["endpoints"]["jobs"] = _get_json(
+                f"{base}/api/v2/jobs/",
+                params={"simulation": sim_id},
+            )
+            # v1 job endpoints often include additional fields (e.g., "notes") that can contain failure reasons.
+            # /api/v2/jobs/{id}/ returns JobShort for non-worker clients (no error details).
+            try:
+                jobs_json = diag["endpoints"]["jobs"].get("json") if isinstance(diag["endpoints"]["jobs"], dict) else None
+                v2_job_results = []
+                if isinstance(jobs_json, dict) and isinstance(jobs_json.get("results"), list):
+                    v2_job_results = jobs_json["results"]
+                failed_job_ids = [
+                    j.get("id")
+                    for j in v2_job_results
+                    if isinstance(j, dict) and j.get("state") == "FAILED"
+                ]
+                # Prioritize START failures
+                failed_job_ids = (
+                    [j.get("id") for j in v2_job_results if isinstance(j, dict) and j.get("state") == "FAILED" and j.get("category") == "START"]
+                    + [jid for jid in failed_job_ids if jid]
+                )
+                # De-dupe while preserving order
+                seen = set()
+                failed_job_ids = [jid for jid in failed_job_ids if jid and not (jid in seen or seen.add(jid))]
+
+                diag["endpoints"]["jobs_v1_failed_details"] = {}
+                for jid in failed_job_ids[:5]:
+                    diag["endpoints"]["jobs_v1_failed_details"][jid] = _get_json(f"{base}/api/v1/job/{jid}/")
+                # If v1 job includes a worker URL, fetch that too (often has availability/health clues).
+                worker_urls = []
+                for job_detail in diag["endpoints"]["jobs_v1_failed_details"].values():
+                    if not isinstance(job_detail, dict):
+                        continue
+                    j = job_detail.get("json")
+                    if isinstance(j, dict) and isinstance(j.get("worker"), str) and j["worker"]:
+                        worker_urls.append(j["worker"])
+                # De-dupe while preserving order
+                seen_w = set()
+                worker_urls = [u for u in worker_urls if not (u in seen_w or seen_w.add(u))]
+                diag["endpoints"]["workers_v1"] = {}
+                for wurl in worker_urls[:3]:
+                    diag["endpoints"]["workers_v1"][wurl] = _get_json(wurl)
+            except Exception as e:
+                diag["endpoints"]["jobs_v1_failed_details_error"] = str(e)
+
+            # v1 simulation often has additional fields compared to v2 (sometimes including worker assignment).
+            diag["endpoints"]["simulation_v1"] = _get_json(f"{base}/api/v1/simulation/{sim_id}/")
+            # NOTE: "events" endpoint is not present in the provided OpenAPI spec for this API host.
+            # Keep a placeholder so the diagnostics format is stable; callers can inspect other sources.
+            diag["endpoints"]["events"] = {"ok": False, "status_code": None, "text": "No /api/v2/*events* endpoint found in .docs/NVIDIA Air API.yaml"}
+            # services (v2 list is under simulations/nodes/interfaces/services/?simulation=<id>
+            diag["endpoints"]["services_v2"] = _get_json(
+                f"{base}/api/v2/simulations/nodes/interfaces/services/",
+                params={"simulation": sim_id},
+            )
+            # services (v1 has useful src_port info; filter to this simulation)
+            diag["endpoints"]["services_v1"] = _get_json(f"{base}/api/v1/service/", params={"simulation": sim_id})
+
+            out_path.write_text(json.dumps(diag, indent=2, default=str))
+            print(f"\n  ℹ Wrote Air failure diagnostics: {out_path}")
+            print(f"  ℹ Tip: you can also run: python scripts/air-tests/get_sim_info.py --sim-id {sim_id}")
+        except Exception as e:
+            # Never fail the deploy because diagnostics failed
+            print(f"\n  Warning: failed to write Air diagnostics: {e}")
+
+    def delete_simulation(self) -> bool:
+        """Best-effort delete of the current simulation."""
+        sim_id = getattr(self, "simulation_id", None)
+        if not sim_id:
+            return False
+        try:
+            resp = requests.delete(
+                f"{self.api_base_url}/api/v2/simulations/{sim_id}/",
+                headers=self.headers,
+                timeout=60,
+            )
+            return resp.status_code in (200, 202, 204)
+        except Exception:
+            return False
+
     def enable_ssh_service(self):
         """
         Enable SSH service for the simulation using the Air SDK.
@@ -1137,8 +1380,14 @@ class AirBCMDeployer:
         
         print("\nEnabling SSH service for simulation...")
         print(f"  Creating SSH service on {self.bcm_node_name}:{interface}...")
+
+        if getattr(self, "skip_ssh_service", False):
+            print("  ℹ Skipping SSH service creation (--skip-ssh-service)")
+            return None
         
         try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
             from air_sdk import AirApi
             
             # Connect to Air SDK
@@ -1326,6 +1575,10 @@ class AirBCMDeployer:
             True if successful, False otherwise
         """
         print("\nAssigning cloud-init to simulation nodes...")
+
+        if getattr(self, "skip_cloud_init", False):
+            print("  ℹ Skipping cloud-init assignment (--skip-cloud-init)")
+            return False
         
         # Check if we have a UserConfig to assign
         userdata_id = getattr(self, 'userconfig_id', None)
@@ -1336,9 +1589,14 @@ class AirBCMDeployer:
         print(f"  Using UserConfig: {userdata_id}")
         
         try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
             from air_sdk import AirApi
         except ImportError:
             print("  ⚠ air_sdk not installed. Install with: pip install air-sdk")
+            return False
+        except Exception as e:
+            print(f"  ⚠ {e}")
             return False
         
         try:
@@ -1419,11 +1677,18 @@ class AirBCMDeployer:
             ssh_info: dict with SSH connection details
             
         Returns:
-            True if successful, False otherwise
+            (ok, details) where details contains:
+              - bootstrap_tool: "sshpass" | "expect" | None
+              - password_change_prompt: bool | None
+              - bootstrap_method: str (stable label for logs)
         """
         if not ssh_info:
             print("  ⚠ Cannot configure node without SSH service info")
-            return False
+            return False, {
+                "bootstrap_tool": None,
+                "password_change_prompt": None,
+                "bootstrap_method": "ssh-missing-ssh-info",
+            }
         
         print("\nConfiguring node passwords via SSH...")
         print(f"  Target: {ssh_info['hostname']}:{ssh_info['port']}")
@@ -1436,11 +1701,23 @@ class AirBCMDeployer:
             ssh_pubkey = Path(self.ssh_public_key).expanduser().read_text().strip()
             print(f"  SSH public key: {self.ssh_public_key}")
         
+        desired_hostname = getattr(self, "bcm_node_name", "bcm-01")
+
         # Create a shell script to run on the remote host
+        # NOTE: This is fed via stdin to "bash -s" (no SCP) to avoid brittle scp/expect flows.
         setup_script_content = f'''#!/bin/bash
 set -e
 
 echo "Configuring BCM head node..."
+
+# Set hostname (cloud-init usually does this; SSH bootstrap needs to be explicit)
+sudo hostnamectl set-hostname "{desired_hostname}"
+if grep -qE "^127\\.0\\.1\\.1\\s+" /etc/hosts; then
+  sudo sed -i -E "s/^127\\.0\\.1\\.1\\s+.*/127.0.1.1 {desired_hostname}/" /etc/hosts
+else
+  echo "127.0.1.1 {desired_hostname}" | sudo tee -a /etc/hosts >/dev/null
+fi
+echo "  ✓ Hostname set to {desired_hostname}"
 
 # Change ubuntu password
 echo "ubuntu:{self.default_password}" | sudo chpasswd
@@ -1454,20 +1731,24 @@ echo "  ✓ Root password changed"
 sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 echo "  ✓ Root SSH login enabled"
 
-# Add SSH key for ubuntu user
-mkdir -p ~/.ssh
-chmod 700 ~/.ssh
-echo '{ssh_pubkey}' >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
-echo "  ✓ Ubuntu SSH key added"
+if [ -n "{ssh_pubkey or ''}" ]; then
+  # Add SSH key for ubuntu user
+  mkdir -p ~/.ssh
+  chmod 700 ~/.ssh
+  echo '{ssh_pubkey or ''}' >> ~/.ssh/authorized_keys
+  chmod 600 ~/.ssh/authorized_keys
+  sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys
+  echo "  ✓ Ubuntu SSH key added"
 
-# Add SSH key for root user
-sudo mkdir -p /root/.ssh
-sudo chmod 700 /root/.ssh
-echo '{ssh_pubkey}' | sudo tee -a /root/.ssh/authorized_keys > /dev/null
-sudo chmod 600 /root/.ssh/authorized_keys
-echo "  ✓ Root SSH key added"
+  # Add SSH key for root user
+  sudo mkdir -p /root/.ssh
+  sudo chmod 700 /root/.ssh
+  echo '{ssh_pubkey or ''}' | sudo tee -a /root/.ssh/authorized_keys > /dev/null
+  sudo chmod 600 /root/.ssh/authorized_keys
+  echo "  ✓ Root SSH key added"
+else
+  echo "  ⚠ No SSH public key provided; skipping key setup"
+fi
 
 # Restart SSH and wait
 sudo systemctl restart ssh
@@ -1476,8 +1757,11 @@ echo "  ✓ SSH service restarted"
 echo "SETUP_COMPLETE"
 '''
         
-        # Write setup script to temp file
-        setup_script_file = Path('/tmp/air_node_setup.sh')
+        # Write setup script to a unique temp file (avoid collisions across concurrent runs)
+        import tempfile
+        ns = _local_namespace() or "default"
+        with tempfile.NamedTemporaryFile(prefix=f"air_node_setup_{ns}_", suffix=".sh", delete=False) as tf:
+            setup_script_file = Path(tf.name)
         setup_script_file.write_text(setup_script_content)
         setup_script_file.chmod(0o755)
         
@@ -1485,40 +1769,73 @@ echo "SETUP_COMPLETE"
         port = ssh_info['port']
         default_pass = "nvidia"
         
+        details = {
+            "bootstrap_tool": None,
+            "password_change_prompt": None,
+            "bootstrap_method": "ssh-unknown",
+        }
+
         try:
+            # Wait for the SSH service to actually accept connections.
+            # We see occasional "Connection refused" even though the service exists in the API.
+            print("\n  Waiting for SSH service to accept connections...")
+            common_opts = [
+                '-o', 'StrictHostKeyChecking=no',
+                '-o', 'UserKnownHostsFile=/dev/null',
+                '-o', 'ConnectTimeout=5',
+                '-o', 'ConnectionAttempts=1',
+            ]
+            ready = False
+            for attempt in range(1, 31):  # ~60-90s depending on sleep
+                sshpass_probe = subprocess.run(['which', 'sshpass'], capture_output=True).returncode == 0
+                if sshpass_probe:
+                    probe_cmd = ['sshpass', '-p', default_pass, 'ssh'] + common_opts + [
+                        '-p', str(port),
+                        f'ubuntu@{host}',
+                        'echo PROBE_OK'
+                    ]
+                    pr = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
+                    if pr.returncode == 0 and "PROBE_OK" in (pr.stdout or ""):
+                        ready = True
+                        break
+                else:
+                    # Try a raw TCP connect check (best-effort) using bash builtin.
+                    pr = subprocess.run(
+                        ["bash", "-lc", f"timeout 3 bash -lc '</dev/tcp/{host}/{port}'"],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if pr.returncode == 0:
+                        ready = True
+                        break
+                if attempt % 5 == 0:
+                    print(f"  (still waiting... attempt {attempt}/30)")
+                time.sleep(3)
+            if not ready:
+                print("  ⚠ SSH service did not become ready in time (continuing anyway)")
+
             # Check if sshpass is available (preferred method)
             sshpass_available = subprocess.run(['which', 'sshpass'], capture_output=True).returncode == 0
+            try_expect_fallback = False
             
             if sshpass_available:
                 print("\n  Using sshpass for password authentication...")
-                
-                # Common options (StrictHostKeyChecking, etc.)
-                common_opts = [
-                    '-o', 'StrictHostKeyChecking=no',
-                    '-o', 'UserKnownHostsFile=/dev/null',
-                ]
-                
-                # Upload the setup script using scp
-                # Note: scp uses -P (uppercase) for port, ssh uses -p (lowercase)
-                print("  Uploading setup script...")
-                scp_cmd = ['sshpass', '-p', default_pass, 'scp'] + common_opts + [
-                    '-P', str(port),  # scp uses uppercase -P for port
-                    str(setup_script_file),
-                    f'ubuntu@{host}:/tmp/setup_node.sh'
-                ]
-                result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode != 0:
-                    print(f"  ⚠ SCP failed: {result.stderr}")
-                    raise Exception("SCP upload failed")
-                
-                # Execute the setup script
-                print("  Executing setup script...")
+                details["bootstrap_tool"] = "sshpass"
+
+                # Execute the setup script via stdin (avoids SCP and is more reliable)
+                print("  Executing setup script (via ssh stdin)...")
                 ssh_cmd = ['sshpass', '-p', default_pass, 'ssh'] + common_opts + [
-                    '-p', str(port),  # ssh uses lowercase -p for port
+                    '-p', str(port),
                     f'ubuntu@{host}',
-                    'bash /tmp/setup_node.sh'
+                    'bash -s'
                 ]
-                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=120)
+                result = subprocess.run(
+                    ssh_cmd,
+                    input=setup_script_content,
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
                 
                 # Show output
                 if result.stdout:
@@ -1526,54 +1843,133 @@ echo "SETUP_COMPLETE"
                         if line.strip():
                             print(f"  {line}")
                 
-                if 'SETUP_COMPLETE' in result.stdout:
+                if 'SETUP_COMPLETE' in (result.stdout or ""):
                     print("\n  ✓ Node configuration complete")
-                    return True
+                    # If sshpass succeeded, we necessarily did NOT hit an interactive forced password-change flow.
+                    details["password_change_prompt"] = False
+                    details["bootstrap_method"] = "ssh-sshpass-no-pwchange"
+                    return True, details
                 else:
                     print(f"\n  ⚠ Setup may not have completed fully")
                     if result.stderr:
                         print(f"    stderr: {result.stderr[:200]}")
-                    return False
-            else:
-                # Fallback to expect
-                print("\n  sshpass not found, using expect fallback...")
-                print("  (Install sshpass for better reliability: sudo apt install sshpass)")
-                
-                # Create expect script
-                expect_script = f'''#!/usr/bin/expect -f
-set timeout 120
-spawn scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P {port} /tmp/air_node_setup.sh ubuntu@{host}:/tmp/setup_node.sh
-expect "password:" {{ send "nvidia\\r" }}
-expect eof
+                    # If the image requires an interactive password-change flow, sshpass won't handle it.
+                    # Fall back to expect which does.
+                    combined = (result.stdout or "") + "\n" + (result.stderr or "")
+                    if any(s in combined.lower() for s in ["current password", "new password", "password expired", "must change", "you are required to change"]):
+                        print("  ℹ Detected a forced password-change prompt; falling back to expect...")
+                        try_expect_fallback = True
+                        details["password_change_prompt"] = True
+                    else:
+                        print("  ℹ No forced password-change prompt detected (or not observable via sshpass).")
+                    if not try_expect_fallback:
+                        details["bootstrap_method"] = "ssh-sshpass-failed"
+                        return False, details
 
-spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {port} ubuntu@{host} "bash /tmp/setup_node.sh"
-expect "password:" {{ send "nvidia\\r" }}
-expect "SETUP_COMPLETE"
-expect eof
-puts "\\n✓ BCM head node configured successfully"
+            if (not sshpass_available) or try_expect_fallback:
+                # Fallback to expect
+                print("\n  Using expect fallback (handles forced password-change prompts)...")
+                details["bootstrap_tool"] = "expect"
+                if not _command_exists("expect"):
+                    print("  ⚠ Required tool not found: expect")
+                    print("  ⚠ Install sshpass or expect: sudo apt install sshpass expect")
+                    details["bootstrap_method"] = "ssh-expect-missing"
+                    return False, details
+
+                import base64
+                setup_script_b64 = base64.b64encode(setup_script_content.encode("utf-8")).decode("ascii")
+
+                # Create expect script.
+                # This mode handles the "forced password change on first login" flow
+                # and runs our setup script by decoding base64 remotely (no scp).
+                expect_script = f'''#!/usr/bin/expect -f
+set timeout 180
+set host "{host}"
+set port "{port}"
+set oldpw "nvidia"
+set newpw "{self.default_password}"
+set saw_pwchange 0
+
+proc handle_pwchange {{}} {{
+    upvar saw_pwchange saw_pwchange
+    # Common forced-change prompts differ slightly across images.
+    expect {{
+        -re "(?i)current.*password" {{
+            set saw_pwchange 1
+            puts "\\nℹ Detected forced password-change prompt (current password)"
+            send "$oldpw\\r"
+            exp_continue
+        }}
+        -re "(?i)enter new.*password|(?i)new.*password" {{
+            set saw_pwchange 1
+            puts "\\nℹ Detected forced password-change prompt (new password)"
+            send "$newpw\\r"
+            exp_continue
+        }}
+        -re "(?i)retype new.*password|(?i)repeat new.*password" {{
+            set saw_pwchange 1
+            puts "\\nℹ Detected forced password-change prompt (retype new password)"
+            send "$newpw\\r"
+            exp_continue
+        }}
+        -re "\\$ $" {{ return }}
+        -re "# $" {{ return }}
+        timeout {{ return }}
+    }}
+}}
+
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $port ubuntu@$host "bash -s"
+expect {{
+    -re "(?i)are you sure you want to continue connecting" {{ send "yes\\r"; exp_continue }}
+    -re "(?i)password:" {{ send "$oldpw\\r"; handle_pwchange }}
+    timeout {{ puts "\\n✗ Timed out waiting for password prompt"; exit 2 }}
+}}
+
+if {{$saw_pwchange == 0}} {{
+    puts "\\nℹ No forced password-change prompt detected (logged in directly)"
+}}
+
+# Now run the setup script by decoding base64 on the remote side.
+send -- "echo {setup_script_b64} | base64 -d | bash\\r"
+
+expect {{
+    -re "SETUP_COMPLETE" {{ puts "\\n✓ BCM head node configured successfully"; exit 0 }}
+    timeout {{ puts "\\n✗ Timed out waiting for SETUP_COMPLETE"; exit 3 }}
+}}
 '''
-                expect_file = Path('/tmp/air_password_config.exp')
+                with tempfile.NamedTemporaryFile(prefix=f"air_password_config_{ns}_", suffix=".exp", delete=False) as tf:
+                    expect_file = Path(tf.name)
                 expect_file.write_text(expect_script)
                 expect_file.chmod(0o700)
-                
+
                 result = subprocess.run(
                     ['expect', str(expect_file)],
                     capture_output=True,
                     text=True,
-                    timeout=180
+                    timeout=240
                 )
-                
+
                 if result.stdout:
                     for line in result.stdout.strip().split('\n'):
                         if line.strip() and not line.startswith('spawn'):
                             print(f"  {line}")
-                
-                if result.returncode == 0 or 'SETUP_COMPLETE' in result.stdout:
+
+                if result.returncode == 0 or 'SETUP_COMPLETE' in (result.stdout or ""):
+                    out = (result.stdout or "")
+                    saw_pwchange = "Detected forced password-change prompt" in out
+                    # Expect script explicitly prints one of:
+                    #   - "Detected forced password-change prompt ..."
+                    #   - "No forced password-change prompt detected (logged in directly)"
+                    details["password_change_prompt"] = saw_pwchange
+                    details["bootstrap_method"] = "ssh-expect-pwchange" if saw_pwchange else "ssh-expect-no-pwchange"
                     print("\n  ✓ Node configuration complete")
-                    return True
+                    return True, details
                 else:
                     print(f"\n  ⚠ Configuration may have issues")
-                    return False
+                    if result.stderr:
+                        print(f"    stderr: {result.stderr[:200]}")
+                    details["bootstrap_method"] = "ssh-expect-failed"
+                    return False, details
                     
         except FileNotFoundError as e:
             print(f"  ⚠ Required tool not found: {e}")
@@ -1583,17 +1979,23 @@ puts "\\n✓ BCM head node configured successfully"
             print(f"    2. Password: nvidia")
             print(f"    3. Run: bash -c 'echo \"ubuntu:{self.default_password}\" | sudo chpasswd'")
             print(f"    4. Add your SSH key to ~/.ssh/authorized_keys")
-            return False
+            details["bootstrap_method"] = "ssh-tool-missing"
+            return False, details
         except subprocess.TimeoutExpired:
             print("  ⚠ Configuration timed out")
-            return False
+            details["bootstrap_method"] = "ssh-timeout"
+            return False, details
         except Exception as e:
             print(f"  ⚠ Error configuring node: {e}")
-            return False
+            details["bootstrap_method"] = "ssh-error"
+            return False, details
         finally:
             # Clean up temp files
             setup_script_file.unlink(missing_ok=True)
-            Path('/tmp/air_password_config.exp').unlink(missing_ok=True)
+            try:
+                expect_file.unlink(missing_ok=True)  # type: ignore[name-defined]
+            except Exception:
+                pass
     
     def create_ssh_config(self, ssh_info, simulation_name):
         """
@@ -1609,13 +2011,51 @@ puts "\\n✓ BCM head node configured successfully"
             return None
         
         print("\nCreating SSH configuration...")
-        
-        # Create .ssh directory in project
-        project_ssh_dir = Path(__file__).parent / '.ssh'
-        project_ssh_dir.mkdir(mode=0o700, exist_ok=True)
-        
-        # Use simulation name for config file
-        config_filename = simulation_name.replace(' ', '-')
+        sim_name_slug = simulation_name.replace(' ', '-')
+
+        # Allow overriding the SSH config output path via env var so different env files
+        # (.env, .env.external, .env.internal) can write to different locations/names.
+        #
+        # Examples:
+        #   AIR_SSH_CONFIG_FILE=~/.ssh/air-external.conf
+        #   AIR_SSH_CONFIG_FILE=~/.ssh/air/{simulation_name_slug}.conf
+        #   AIR_SSH_CONFIG_FILE=./.ssh/internal/{simulation_id}
+        #
+        # If a directory is provided, we will write <dir>/<simulation_name_slug>.
+        ssh_config_override = os.getenv("AIR_SSH_CONFIG_FILE") or os.getenv("BCM_SSH_CONFIG_FILE")
+
+        config_file: Path
+        if ssh_config_override:
+            raw = os.path.expanduser(ssh_config_override.strip())
+            if not raw:
+                print("  ⚠ AIR_SSH_CONFIG_FILE is set but empty; falling back to default ./.ssh/<simulation>")
+                ssh_config_override = None
+            else:
+                fmt = {
+                    "simulation_name": simulation_name,
+                    "simulation_name_slug": sim_name_slug,
+                    "simulation_id": self.simulation_id or "",
+                }
+                try:
+                    resolved = raw.format_map(fmt) if "{" in raw else raw
+                except Exception as e:
+                    print(f"  ⚠ Could not format AIR_SSH_CONFIG_FILE='{ssh_config_override}': {e}")
+                    print("  ⚠ Falling back to default ./.ssh/<simulation>")
+                    resolved = ""
+                    ssh_config_override = None
+
+                if ssh_config_override:
+                    p = Path(resolved)
+                    # If the override is (or looks like) a directory, append default filename.
+                    if str(resolved).endswith(os.sep) or (p.exists() and p.is_dir()):
+                        p = p / sim_name_slug
+                    config_file = p
+
+        if not ssh_config_override:
+            # Default: create .ssh directory in project and use simulation name for config filename
+            project_ssh_dir = _local_ssh_dir()
+            project_ssh_dir.mkdir(mode=0o700, exist_ok=True)
+            config_file = project_ssh_dir / sim_name_slug
         
         # Create config content - direct connection to BCM head node
         config_content = f"""# NVIDIA Air Simulation SSH Configuration
@@ -1647,7 +2087,7 @@ Host bcm
 """
         
         # Write config file
-        config_file = project_ssh_dir / config_filename
+        config_file.parent.mkdir(parents=True, exist_ok=True)
         config_file.write_text(config_content)
         config_file.chmod(0o600)
         
@@ -1855,56 +2295,44 @@ Host bcm
             print(f"\n✗ Script upload failed: {e}")
             return False
     
-    def upload_ansible_installer(self, ssh_config_file):
+    def upload_bcm_collection_patch(self, bcm_version, ssh_config_file):
         """
-        Upload the bcm-ansible-installer submodule directory to the head node
-        
-        Args:
-            ssh_config_file: Path to SSH config file
-            
-        Returns:
-            True if successful, False otherwise
+        Upload an optional per-BCM-version collection patch script to the head node.
+
+        If scripts/patches/<bcm_version>.py exists locally, upload it to:
+          /home/ubuntu/bcm_patches/<bcm_version>.py
         """
-        print(f"\n📦 Uploading bcm-ansible-installer directory...")
-        
-        # Find the submodule directory (relative to this script)
-        installer_dir = Path(__file__).parent / 'bcm-ansible-installer'
-        if not installer_dir.exists():
-            print(f"\n✗ bcm-ansible-installer submodule not found at {installer_dir}")
-            print(f"  Please ensure the submodule is initialized:")
-            print(f"    git submodule update --init")
-            return False
-        
-        # Use rsync to upload the directory
-        ssh_cmd = f"ssh -F {ssh_config_file} -o StrictHostKeyChecking=no"
-        remote_path = f"air-{self.bcm_node_name}:/home/ubuntu/"
-        
-        cmd = [
-            'rsync',
-            '-avz',
-            '--delete',           # Ensure clean copy
-            '-e', ssh_cmd,
-            str(installer_dir) + '/',  # Trailing slash to copy contents
-            f"air-{self.bcm_node_name}:/home/ubuntu/bcm-ansible-installer/"
+        patch_src = Path(__file__).parent / 'scripts' / 'patches' / f'{bcm_version}.py'
+        if not patch_src.exists():
+            print("  ℹ No BCM collection patch for this version")
+            return True
+
+        print(f"\n🩹 Uploading BCM collection patch: {patch_src.name}...")
+
+        remote_dir = "/home/ubuntu/bcm_patches"
+        ssh_mkdir = [
+            'ssh',
+            '-F', ssh_config_file,
+            '-o', 'StrictHostKeyChecking=no',
+            f'air-{self.bcm_node_name}',
+            f'mkdir -p {remote_dir}'
         ]
-        
+        scp_cmd = [
+            'scp',
+            '-F', ssh_config_file,
+            '-o', 'StrictHostKeyChecking=no',
+            str(patch_src),
+            f"air-{self.bcm_node_name}:{remote_dir}/{patch_src.name}",
+        ]
         try:
-            result = subprocess.run(
-                cmd,
-                check=True,
-                capture_output=False,
-                text=True
-            )
-            print(f"  ✓ bcm-ansible-installer uploaded")
+            subprocess.run(ssh_mkdir, check=True, capture_output=True)
+            subprocess.run(scp_cmd, check=True, capture_output=True, text=True)
+            print("  ✓ Patch uploaded")
             return True
         except subprocess.CalledProcessError as e:
-            print(f"\n✗ Ansible installer upload failed: {e}")
+            print(f"\n✗ Patch upload failed: {e}")
             return False
-        except FileNotFoundError:
-            print(f"\n✗ rsync not found. Please install rsync:")
-            print(f"    sudo apt-get install rsync")
-            return False
-    
+
     def execute_bcm_install(self, ssh_config_file):
         """
         Execute BCM installation script on the head node
@@ -1980,6 +2408,10 @@ Host bcm
         # Step 3: Upload install script (bcm-ansible-installer is cloned on remote host)
         if not self.upload_install_script(bcm_version, ssh_config_file):
             raise RuntimeError("Failed to upload installation script")
+
+        # Step 4: Upload optional per-version patch for the installed Ansible collection
+        if not self.upload_bcm_collection_patch(bcm_version, ssh_config_file):
+            raise RuntimeError("Failed to upload BCM collection patch")
         
         # Step 5: Execute installation
         if not self.execute_bcm_install(ssh_config_file):
@@ -2019,6 +2451,205 @@ Host bcm
             print(f"  /home/ubuntu/ansible_bcm_install.log on {self.bcm_node_name}")
         
         print("\n" + "="*60 + "\n")
+    
+    def load_topology_features(self, topology_dir):
+        """
+        Load features.yaml from a topology directory
+        
+        Args:
+            topology_dir: Path to topology directory containing features.yaml
+            
+        Returns:
+            dict: Features configuration, or empty dict if not found
+        """
+        if yaml is None:
+            print("  ⚠ PyYAML not installed - features.yaml support disabled")
+            return {}
+        
+        features_path = Path(topology_dir) / 'features.yaml'
+        if not features_path.exists():
+            print(f"  ℹ No features.yaml found in {topology_dir}")
+            return {}
+        
+        try:
+            with open(features_path, 'r') as f:
+                features = yaml.safe_load(f) or {}
+            return features
+        except Exception as e:
+            print(f"  ⚠ Error loading features.yaml: {e}")
+            return {}
+    
+    def run_post_install_features(self, topology_dir, ssh_config_file):
+        """
+        Execute post-install features defined in features.yaml
+        
+        Args:
+            topology_dir: Path to topology directory
+            ssh_config_file: Path to SSH config file for remote execution
+            
+        Returns:
+            bool: True if all enabled features succeeded
+        """
+        print("\n" + "="*60)
+        print("Post-Install Features")
+        print("="*60)
+        
+        features = self.load_topology_features(topology_dir)
+        if not features:
+            print("  No features configured")
+            return True
+        
+        topology_dir = Path(topology_dir)
+        success = True
+        enabled_features = []
+        
+        # Check which features are enabled
+        for feature_name, config in features.items():
+            if isinstance(config, dict) and config.get('enabled', False):
+                enabled_features.append((feature_name, config))
+        
+        if not enabled_features:
+            print("  All features disabled in features.yaml")
+            return True
+        
+        print(f"  Enabled features: {', '.join(f[0] for f in enabled_features)}")
+        
+        for feature_name, config in enabled_features:
+            print(f"\n  Configuring: {feature_name}")
+            
+            config_file = config.get('config_file')
+            if not config_file:
+                print(f"    ⚠ No config_file specified for {feature_name}")
+                continue
+            
+            local_config_path = topology_dir / config_file
+            if not local_config_path.exists():
+                print(f"    ⚠ Config file not found: {local_config_path}")
+                continue
+            
+            # Determine how to execute based on feature type
+            if feature_name == 'workload_manager':
+                # cm-wlm-setup requires special handling
+                wlm_type = config.get('type', 'slurm')
+                success = self._run_wlm_setup(local_config_path, ssh_config_file, wlm_type) and success
+            elif feature_name == 'bcm_switches':
+                # Switches may need ZTP script copied
+                ztp_script = config.get('ztp_script')
+                if ztp_script:
+                    ztp_path = topology_dir / ztp_script
+                    if ztp_path.exists():
+                        success = self._upload_ztp_script(ztp_path, ssh_config_file) and success
+                success = self._run_cmsh_script(local_config_path, ssh_config_file) and success
+            else:
+                # Default: run as cmsh script
+                success = self._run_cmsh_script(local_config_path, ssh_config_file) and success
+        
+        if success:
+            print("\n  ✓ All features configured successfully")
+        else:
+            print("\n  ⚠ Some features had errors (see above)")
+        
+        return success
+    
+    def _run_cmsh_script(self, local_script_path, ssh_config_file):
+        """Upload and execute a cmsh script on the BCM head node"""
+        remote_script = f"/tmp/{local_script_path.name}"
+        
+        try:
+            # Upload script
+            subprocess.run([
+                'scp', '-F', ssh_config_file,
+                str(local_script_path),
+                f"air-{self.bcm_node_name}:{remote_script}"
+            ], check=True, capture_output=True)
+            
+            # Execute with cmsh
+            result = subprocess.run([
+                'ssh', '-F', ssh_config_file,
+                f"air-{self.bcm_node_name}",
+                f"cmsh -f {remote_script}"
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f"    ✓ {local_script_path.name} executed")
+                return True
+            else:
+                print(f"    ✗ {local_script_path.name} failed: {result.stderr}")
+                return False
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ Error running {local_script_path.name}: {e}")
+            return False
+    
+    def _upload_ztp_script(self, local_ztp_path, ssh_config_file):
+        """Upload ZTP script to BCM's HTTP directory for switch provisioning"""
+        remote_ztp = "/cm/images/default-image/http/cumulus-ztp.sh"
+        
+        try:
+            # Upload to temporary location first, then move with sudo
+            subprocess.run([
+                'scp', '-F', ssh_config_file,
+                str(local_ztp_path),
+                f"air-{self.bcm_node_name}:/tmp/cumulus-ztp.sh"
+            ], check=True, capture_output=True)
+            
+            subprocess.run([
+                'ssh', '-F', ssh_config_file,
+                f"air-{self.bcm_node_name}",
+                f"sudo mkdir -p /cm/images/default-image/http && sudo mv /tmp/cumulus-ztp.sh {remote_ztp} && sudo chmod 644 {remote_ztp}"
+            ], check=True, capture_output=True)
+            
+            print(f"    ✓ ZTP script uploaded to {remote_ztp}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"    ⚠ ZTP script upload failed: {e}")
+            return False
+    
+    def _run_wlm_setup(self, config_path, ssh_config_file, wlm_type):
+        """Run cm-wlm-setup with the provided configuration"""
+        print(f"    Running cm-wlm-setup for {wlm_type}...")
+        
+        try:
+            # Upload config file
+            remote_config = f"/tmp/{config_path.name}"
+            subprocess.run([
+                'scp', '-F', ssh_config_file,
+                str(config_path),
+                f"air-{self.bcm_node_name}:{remote_config}"
+            ], check=True, capture_output=True)
+            
+            # Run cm-wlm-setup
+            result = subprocess.run([
+                'ssh', '-F', ssh_config_file,
+                f"air-{self.bcm_node_name}",
+                f"sudo cm-wlm-setup -c {remote_config}"
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f"    ✓ Workload manager ({wlm_type}) configured")
+                return True
+            else:
+                print(f"    ⚠ cm-wlm-setup returned non-zero: {result.stderr}")
+                return False
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ Error running cm-wlm-setup: {e}")
+            return False
+
+
+def _command_exists(cmd: str) -> bool:
+    try:
+        return subprocess.run(["which", cmd], capture_output=True).returncode == 0
+    except Exception:
+        return False
+
+
+def _strip_flag_args(argv: list[str], flags: set[str]) -> list[str]:
+    """Remove any occurrences of the provided flags (boolean flags only)."""
+    out: list[str] = []
+    for a in argv:
+        if a in flags:
+            continue
+        out.append(a)
+    return out
 
 
 def main():
@@ -2072,9 +2703,9 @@ Examples:
     )
     parser.add_argument(
         '--topology',
-        dest='topology_file',
-        default='topologies/default.json',
-        help='Path to JSON topology file. Create custom topologies in NVIDIA Air web UI and export to JSON. (default: topologies/default.json)'
+        dest='topology_path',
+        default='topologies/default',
+        help='Path to topology directory (containing topology.json and features.yaml) or legacy JSON file. (default: topologies/default)'
     )
     parser.add_argument(
         '--name',
@@ -2095,6 +2726,11 @@ Examples:
         help='Accept defaults for all prompts (BCM 10, Nvidia1234!, auto-generated name)'
     )
     parser.add_argument(
+        '--keep-progress',
+        action='store_true',
+        help='Do not auto-clear .logs/progress.json on successful completion (useful for test-loop logging).'
+    )
+    parser.add_argument(
         '--resume',
         action='store_true',
         help='Resume from last checkpoint (uses .logs/progress.json)'
@@ -2103,6 +2739,21 @@ Examples:
         '--clear-progress',
         action='store_true',
         help='Clear saved progress and start fresh'
+    )
+    parser.add_argument(
+        '--skip-cloud-init',
+        action='store_true',
+        help='Skip applying cloud-init UserConfig to nodes (isolation/debug)'
+    )
+    parser.add_argument(
+        '--skip-ssh-service',
+        action='store_true',
+        help='Skip creating the SSH service (isolation/debug)'
+    )
+    parser.add_argument(
+        '--no-sdk',
+        action='store_true',
+        help='Do not use air-sdk even if installed; use REST-only (isolation/debug)'
     )
     
     args = parser.parse_args()
@@ -2153,7 +2804,10 @@ Examples:
                 api_token=args.api_token,
                 username=None,  # Will load from env
                 non_interactive=args.non_interactive,
-                progress_tracker=progress
+                progress_tracker=progress,
+                skip_cloud_init=args.skip_cloud_init,
+                skip_ssh_service=args.skip_ssh_service,
+                no_sdk=args.no_sdk,
             )
         except Exception as e:
             # Authentication errors are already printed with troubleshooting info
@@ -2219,6 +2873,26 @@ Examples:
             simulation_name = deployer.prompt_simulation_name()
             progress.complete_step('simulation_name_set', simulation_name=simulation_name)
         
+        # Resolve topology path (supports directories or legacy JSON files)
+        topology_path = Path(args.topology_path)
+        if topology_path.is_dir():
+            # New structure: topologies/default/ with topology.json inside
+            topology_dir = topology_path
+            topology_file = topology_path / 'topology.json'
+        elif topology_path.suffix == '.json' and topology_path.exists():
+            # Legacy: direct path to JSON file
+            topology_file = topology_path
+            topology_dir = topology_path.parent
+        else:
+            # Try adding .json extension for backward compatibility
+            if (topology_path.parent / f"{topology_path.name}.json").exists():
+                topology_file = topology_path.parent / f"{topology_path.name}.json"
+                topology_dir = topology_path.parent
+            else:
+                print(f"\n✗ Error: Topology not found: {topology_path}")
+                print("  Expected: directory with topology.json or a .json file")
+                sys.exit(1)
+        
         # Step: Create simulation
         if args.resume and progress.is_step_completed('simulation_created'):
             deployer.simulation_id = progress.get('simulation_id')
@@ -2232,7 +2906,6 @@ Examples:
             if deployer.userconfig_id:
                 print(f"  [resume] UserConfig ID: {deployer.userconfig_id}")
         else:
-            topology_file = Path(args.topology_file)
             if not topology_file.exists():
                 print(f"\n✗ Error: Topology file not found: {topology_file}")
                 sys.exit(1)
@@ -2248,7 +2921,8 @@ Examples:
                                    bcm_node_name=deployer.bcm_node_name,
                                    bcm_outbound_interface=deployer.bcm_outbound_interface,
                                    bcm_management_interface=deployer.bcm_management_interface,
-                                   userconfig_id=userconfig_id)
+                                   userconfig_id=userconfig_id,
+                                   topology_dir=str(topology_dir))
         
         # Step: Assign cloud-init to nodes (needs simulation to exist)
         if args.resume and progress.is_step_completed('cloudinit_configured'):
@@ -2272,6 +2946,44 @@ Examples:
         else:
             if not deployer.wait_for_simulation_loaded(timeout=300):
                 print("\n✗ Error: Simulation did not load in time")
+
+                # Auto-fallback: if cloud-init was used and sim fails to load, retry once with --skip-cloud-init
+                # (requires sshpass or expect for the SSH/password bootstrap path).
+                if (not args.skip_cloud_init) and cloudinit_success:
+                    have_expect = _command_exists("expect")
+                    have_sshpass = _command_exists("sshpass")
+
+                    if not (have_expect or have_sshpass):
+                        print("\nSimulation failed to load with cloud-init.")
+                        print('Please run "sudo apt update && sudo apt install expect" and then try again with "./deploy_bcm_air.py --skip-cloud-init".')
+                        print("Tip: sshpass also works (sudo apt install sshpass).")
+                        return 1
+
+                    print("\nSimulation failed to load with cloud-init; falling back to SSH/expect method.")
+                    print("Deleting simulation and restarting from the beginning with --skip-cloud-init...")
+
+                    # Delete current sim (best-effort)
+                    deleted = deployer.delete_simulation()
+                    if deleted:
+                        print("  ✓ Simulation deleted")
+                    else:
+                        print("  ⚠ Simulation delete failed (continuing anyway)")
+
+                    # Clear progress so we truly restart from the beginning
+                    progress.clear()
+
+                    # Re-run this script with the same args, forcing skip-cloud-init
+                    rerun_args = _strip_flag_args(sys.argv[1:], {"--resume"})
+                    if "--skip-cloud-init" not in rerun_args:
+                        rerun_args.append("--skip-cloud-init")
+                    # IMPORTANT: do NOT pass --clear-progress here. That flag is designed to
+                    # clear progress and exit cleanly. We already called progress.clear()
+                    # above, so the rerun will start fresh automatically.
+
+                    print(f"\n[auto-fallback] Re-running: {sys.executable} {Path(__file__).name} {' '.join(rerun_args)}")
+                    rc = subprocess.run([sys.executable, str(Path(__file__).resolve()), *rerun_args]).returncode
+                    return rc
+
                 return 1
             progress.complete_step('simulation_loaded')
         
@@ -2318,11 +3030,22 @@ Examples:
             print("\n⚠ Cloud-init configuration failed")
             print("  Note: On air.nvidia.com free tier, cloud-init may not be available")
             print("  Attempting SSH fallback for password configuration...")
-            if not deployer.configure_node_passwords(ssh_info):
+            ok, details = deployer.configure_node_passwords(ssh_info)
+            if not ok:
                 print("\n  ℹ Continuing with default password 'nvidia'")
                 print("  ℹ You can change it manually after connecting")
+            progress.set(
+                bootstrap_method=details.get("bootstrap_method", "ssh-unknown"),
+                bootstrap_tool=details.get("bootstrap_tool"),
+                bootstrap_password_change_prompt=details.get("password_change_prompt"),
+            )
         else:
             print("\n✓ Passwords configured via cloud-init (set at boot time)")
+            progress.set(
+                bootstrap_method="cloud-init",
+                bootstrap_tool="cloud-init",
+                bootstrap_password_change_prompt=None,
+            )
         
         # Step: Install BCM
         if not args.skip_ansible:
@@ -2333,6 +3056,18 @@ Examples:
                 progress.complete_step('bcm_installed')
         else:
             print("\n--skip-ansible specified, skipping BCM installation")
+        
+        # Step: Post-install features (if features.yaml exists in topology directory)
+        if not args.skip_ansible:
+            if args.resume and progress.is_step_completed('features_configured'):
+                print(f"  [resume] Features already configured")
+            else:
+                # Get topology_dir from progress or current resolution
+                saved_topology_dir = progress.get('topology_dir')
+                feature_topology_dir = Path(saved_topology_dir) if saved_topology_dir else topology_dir
+                
+                deployer.run_post_install_features(feature_topology_dir, ssh_config_file)
+                progress.complete_step('features_configured')
         
         # Mark completed
         progress.complete_step('completed')
@@ -2349,9 +3084,12 @@ Examples:
         print("deployment starts fresh? (Recommended)")
         
         if args.non_interactive:
-            print("  [non-interactive] Clearing progress file")
-            progress.clear()
-            print("  ✓ Progress file cleared")
+            if args.keep_progress:
+                print("  [non-interactive] Keeping progress file (--keep-progress)")
+            else:
+                print("  [non-interactive] Clearing progress file")
+                progress.clear()
+                print("  ✓ Progress file cleared")
         else:
             print("\nClear progress file? [Y/n]: ", end="")
             response = input().strip().lower()

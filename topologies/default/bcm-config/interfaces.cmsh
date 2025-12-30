@@ -1,0 +1,26 @@
+# interfaces.cmsh - Configure BCM interfaces (bonding, VLANs, etc.)
+# This file is executed with: cmsh -f interfaces.cmsh
+# Uncomment and modify the examples below as needed.
+
+# Example: Configure bond0 on the BCM head node
+# device
+# use bcm-01
+# interfaces
+# add physical eth2
+# add physical eth3
+# add bond bond0
+# set bond0 bondingoptions mode=802.3ad,miimon=100,lacp_rate=fast
+# set bond0 slaves eth2,eth3
+# commit
+
+# Example: Configure bond0 in the default software image
+# softwareimage
+# use default-image
+# interfaces
+# add physical eth2
+# add physical eth3
+# add bond bond0
+# set bond0 bondingoptions mode=802.3ad,miimon=100,lacp_rate=fast
+# set bond0 slaves eth2,eth3
+# commit
+

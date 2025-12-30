@@ -1,0 +1,25 @@
+# nodes.cmsh - Add compute nodes to BCM inventory
+# This file is executed with: cmsh -f nodes.cmsh
+# Uncomment and modify the examples below as needed.
+
+# Example: Add a single compute node
+# device
+# add physicalnode node001
+# set node001 category default
+# set node001 mac 00:11:22:33:44:55
+# set node001 ip 192.168.200.1
+# commit
+
+# Example: Add multiple compute nodes with a loop
+# device
+# foreach -n node00[1-4] (add physicalnode %%N; set %%N category default)
+# commit
+
+# Example: Configure node properties
+# device
+# use node001
+# set bootprofile default
+# set installmode AUTO
+# set provisioninginterface eth0
+# commit
+
