@@ -813,6 +813,30 @@ The install script creates all Ansible files inline on the remote host:
 
 This uses the official Bright Computing Ansible Galaxy collections for actual BCM installation.
 
+### Post-install configuration (`features.yaml`)
+
+After BCM installation completes, the deploy script can optionally run topology-local post-install steps from `features.yaml` inside your topology directory.
+
+- **Default behavior (backward compatible)**: each enabled feature runs `cmsh -f <config_file>` in the order they appear in `features.yaml`.
+- **Reboots**: some changes (like interface bonding) require a reboot. Add `reboot_after: true` under the feature to perform a managed reboot (reboot + wait for SSH to return) before continuing.
+- **Per-major BCM differences (10 vs 11)**: `config_file` and `ztp_script` can be a string or a dict keyed by BCM major version.
+
+Example:
+
+```yaml
+bcm_interfaces:
+  enabled: true
+  config_file: bcm-config/interfaces.cmsh
+  reboot_after: true
+
+bcm_switches:
+  enabled: true
+  config_file:
+    "10": bcm-config/switches_v10.cmsh
+    "11": bcm-config/switches_v11.cmsh
+  ztp_script: scripts/cumulus-ztp.sh
+```
+
 ---
 
 **Note:** This automated deployment replaces the previous manual process of creating, modifying, and uploading custom BCM images. The new approach uses stock Ubuntu 24.04 images available in NVIDIA Air, making deployment faster and more maintainable.

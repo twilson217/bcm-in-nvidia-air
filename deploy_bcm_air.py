@@ -2694,7 +2694,96 @@ Host bcm
             print(f"  ⚠ Error loading features.yaml: {e}")
             return {}
     
-    def run_post_install_features(self, topology_dir, ssh_config_file):
+    def _resolve_versioned_value(self, value, bcm_major: str):
+        """
+        Resolve a value that can be either:
+          - a string (returned as-is)
+          - a dict keyed by BCM major version ("10"/"11" or 10/11)
+        """
+        if isinstance(value, dict):
+            # try string key first, then int key
+            if bcm_major in value:
+                return value[bcm_major]
+            try:
+                k = int(bcm_major)
+                if k in value:
+                    return value[k]
+            except Exception:
+                pass
+        return value
+
+    def _managed_reboot(self, ssh_config_file: str, timeout: int = 900) -> bool:
+        """
+        Reboot BCM node and wait for SSH to come back.
+        This is intended for post-install steps where a reboot is required for settings to apply.
+        """
+        print("\n  🔁 Managed reboot requested...")
+        host = f"air-{self.bcm_node_name}"
+
+        # Trigger reboot (connection likely drops; treat non-zero as expected)
+        try:
+            subprocess.run(
+                [
+                    "ssh",
+                    "-F",
+                    ssh_config_file,
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    "-o",
+                    "UserKnownHostsFile=/dev/null",
+                    host,
+                    "sudo reboot || true",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception:
+            pass
+
+        # Wait for SSH to return
+        print("  ⏳ Waiting for SSH to go down and come back...")
+        start = time.time()
+        last_msg = 0.0
+        while time.time() - start < timeout:
+            try:
+                r = subprocess.run(
+                    [
+                        "ssh",
+                        "-F",
+                        ssh_config_file,
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=5",
+                        "-o",
+                        "StrictHostKeyChecking=no",
+                        "-o",
+                        "UserKnownHostsFile=/dev/null",
+                        host,
+                        "echo REBOOT_OK",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                if r.returncode == 0 and "REBOOT_OK" in (r.stdout or ""):
+                    print("  ✓ SSH is back after reboot")
+                    # Give services a moment to settle
+                    time.sleep(10)
+                    return True
+            except Exception:
+                pass
+
+            if time.time() - last_msg > 30:
+                print("  (still waiting for SSH...)")
+                last_msg = time.time()
+            time.sleep(5)
+
+        print(f"  ✗ Timed out waiting for SSH after reboot (timeout={timeout}s)")
+        return False
+
+    def run_post_install_features(self, topology_dir, ssh_config_file, bcm_version: str):
         """
         Execute post-install features defined in features.yaml
         
@@ -2716,10 +2805,14 @@ Host bcm
         
         topology_dir = Path(topology_dir)
         success = True
+        bcm_major = (bcm_version.split(".")[0] if bcm_version else "").strip() or "10"
+
         enabled_features = []
         
         # Check which features are enabled
         for feature_name, config in features.items():
+            if feature_name == "actions":
+                continue
             if isinstance(config, dict) and config.get('enabled', False):
                 enabled_features.append((feature_name, config))
         
@@ -2727,37 +2820,93 @@ Host bcm
             print("  All features disabled in features.yaml")
             return True
         
-        print(f"  Enabled features: {', '.join(f[0] for f in enabled_features)}")
-        
-        for feature_name, config in enabled_features:
-            print(f"\n  Configuring: {feature_name}")
-            
-            config_file = config.get('config_file')
-            if not config_file:
-                print(f"    ⚠ No config_file specified for {feature_name}")
-                continue
-            
-            local_config_path = topology_dir / config_file
-            if not local_config_path.exists():
-                print(f"    ⚠ Config file not found: {local_config_path}")
-                continue
-            
-            # Determine how to execute based on feature type
-            if feature_name == 'workload_manager':
-                # cm-wlm-setup requires special handling
-                wlm_type = config.get('type', 'slurm')
-                success = self._run_wlm_setup(local_config_path, ssh_config_file, wlm_type) and success
-            elif feature_name == 'bcm_switches':
-                # Switches may need ZTP script copied
-                ztp_script = config.get('ztp_script')
-                if ztp_script:
-                    ztp_path = topology_dir / ztp_script
+        # Build an ordered action list. If features.yaml contains an explicit "actions:" list, use it.
+        # Otherwise, run enabled features in YAML order, with optional per-feature reboot_after.
+        actions = []
+
+        explicit_actions = features.get("actions")
+        if isinstance(explicit_actions, list):
+            actions = explicit_actions
+        else:
+            for feature_name, config in enabled_features:
+                config_file = self._resolve_versioned_value(config.get("config_file"), bcm_major)
+                if config_file:
+                    actions.append({"type": "cmsh", "name": feature_name, "script": str(config_file)})
+                if feature_name == "bcm_switches":
+                    ztp_script = self._resolve_versioned_value(config.get("ztp_script"), bcm_major)
+                    if ztp_script:
+                        actions.insert(len(actions) - 1, {"type": "upload_ztp", "name": feature_name, "path": str(ztp_script)})
+                if config.get("reboot_after", False):
+                    actions.append({"type": "reboot", "name": f"{feature_name}-reboot"})
+
+        if not actions:
+            print("  No post-install actions to run")
+            return True
+
+        # Resumable execution using progress.json
+        progress = getattr(self, "progress", None)
+        idx = 0
+        if progress:
+            idx = int(progress.get("post_install_action_index", 0) or 0)
+            progress.set(post_install_action_total=len(actions))
+
+        print(f"  Planned actions: {len(actions)}")
+
+        for i in range(idx, len(actions)):
+            act = actions[i]
+            act_type = (act.get("type") or "").strip()
+            act_name = act.get("name") or f"action-{i+1}"
+            if progress:
+                progress.set(post_install_action_index=i, post_install_action=act)
+
+            print(f"\n  [{i+1}/{len(actions)}] {act_type}: {act_name}")
+
+            if act_type == "cmsh":
+                script_val = self._resolve_versioned_value(act.get("script"), bcm_major)
+                if not script_val:
+                    print("    ⚠ Missing script for cmsh action")
+                    success = False
+                    break
+                local_path = topology_dir / str(script_val)
+                if not local_path.exists():
+                    print(f"    ⚠ Config file not found: {local_path}")
+                    success = False
+                    break
+                success = self._run_cmsh_script(local_path, ssh_config_file) and success
+                if not success:
+                    break
+            elif act_type == "upload_ztp":
+                path_val = self._resolve_versioned_value(act.get("path"), bcm_major)
+                if path_val:
+                    ztp_path = topology_dir / str(path_val)
                     if ztp_path.exists():
                         success = self._upload_ztp_script(ztp_path, ssh_config_file) and success
-                success = self._run_cmsh_script(local_config_path, ssh_config_file) and success
+                    else:
+                        print(f"    ⚠ ZTP script not found: {ztp_path}")
+                else:
+                    print("    ⚠ Missing path for upload_ztp action")
+            elif act_type == "reboot":
+                ok = self._managed_reboot(ssh_config_file)
+                success = ok and success
+                if not ok:
+                    break
+            elif act_type == "wlm_setup":
+                # Optional explicit action type (kept for future expansions)
+                cfg = self._resolve_versioned_value(act.get("config"), bcm_major)
+                if not cfg:
+                    print("    ⚠ Missing config for wlm_setup action")
+                    success = False
+                    break
+                local_path = topology_dir / str(cfg)
+                wlm_type = act.get("wlm_type") or "slurm"
+                success = self._run_wlm_setup(local_path, ssh_config_file, wlm_type) and success
+                if not success:
+                    break
             else:
-                # Default: run as cmsh script
-                success = self._run_cmsh_script(local_config_path, ssh_config_file) and success
+                print(f"    ⚠ Unknown action type: {act_type} (skipping)")
+
+            if progress:
+                progress.set(post_install_action_index=i + 1)
         
         if success:
             print("\n  ✓ All features configured successfully")
@@ -3450,7 +3599,7 @@ Examples:
                 saved_topology_dir = progress.get('topology_dir')
                 feature_topology_dir = Path(saved_topology_dir) if saved_topology_dir else topology_dir
                 
-                deployer.run_post_install_features(feature_topology_dir, ssh_config_file)
+                deployer.run_post_install_features(feature_topology_dir, ssh_config_file, bcm_version=bcm_version)
                 progress.complete_step('features_configured')
         
         # Mark completed

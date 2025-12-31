@@ -1,0 +1,7 @@
+# interfaces.cmsh - Configure BCM interfaces (bonding, VLANs, etc.)
+# This file is executed with: cmsh -f interfaces.cmsh
+# Uncomment and modify the examples below as needed.
+
+device;use bcm-01;interfaces;use eth1;clear ip;clear network;commit
+device;use bcm-01;interfaces;add bond bond0;set interfaces eth1 eth2;set mode 4;commit
+
