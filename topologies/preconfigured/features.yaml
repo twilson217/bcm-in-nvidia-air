@@ -3,15 +3,10 @@
 # Config files are relative to this topology directory.
 
 # BCM Interfaces - Configure bond0 for BCM head node and compute nodes
-bcm_interfaces:
+bcm_networking:
   enabled: true
-  config_file: bcm-config/interfaces.cmsh
+  config_file: bcm-config/networking.cmsh
   reboot_after: true
-
-# BCM Networks - Define additional networks (internalnet, ipminet0, dgxnet, etc.)
-bcm_networks:
-  enabled: false
-  config_file: bcm-config/networks.cmsh
 
 # BCM Nodes - Add compute nodes to BCM inventory
 bcm_nodes:
@@ -21,10 +16,11 @@ bcm_nodes:
 # BCM Switches - Add switches to BCM and configure ZTP
 bcm_switches:
   enabled: false
-  config_file: bcm-config/switches.cmsh
-  ztp_script: scripts/cumulus-ztp.sh
+  config_file:
+    "10": bcm-config/switches_v10.cmsh
+    # "11": bcm-config/switches_v11.cmsh
   # switch_configs: Optional directory containing per-switch configuration files
-  # switch_configs_dir: bcm-config/switch-configs/
+  switch_configs_dir: bcm-config/switch-configs/
 
 # Workload Manager - Configure Slurm or Kubernetes
 workload_manager:

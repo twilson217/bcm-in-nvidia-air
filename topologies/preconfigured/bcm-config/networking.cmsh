@@ -1,0 +1,12 @@
+# networking.cmsh - Configure BCM networking (bonding, routes, etc.)
+# This file is executed with: cmsh -f networking.cmsh
+# Uncomment and modify the examples below as needed.
+
+device;use bcm-01;interfaces;use eth1;clear ip;clear network;commit
+device;use bcm-01;interfaces;add physical eth2;commit
+device;use bcm-01;interfaces;add bond bond0;set interfaces eth1 eth2;set mode 4;set network internalnet;set ip 192.168.200.254;commit
+device;use bcm-01;staticroutes;add internal;set destination 10.0.0.0/8;set gateway 192.168.200.1;set networkdevicename bond0;commit
+network;use internalnet;set lockdowndhcpd yes;clear dynamicrangestart;clear dynamicrangeend;commit
+network;add mgmtnet;set baseaddress 10.1.28.0;set netmaskbits 24;set gateway 10.1.28.1;set domainname eth.mgmt;set managementallowed yes;set dynamicrangestart 10.1.28.160;set dynamicrangeend 10.1.28.222;commit
+network;add hpcnet;set baseaddress 10.1.37.0;set netmaskbits 24;set gateway 10.1.37.1;set domainname eth.hpc;set managementallowed yes;set dynamicrangestart 10.1.37.160;set dynamicrangeend 10.1.37.222;commit
+device;use bcm-01;interfaces;add physical eth3;set network mgmtnet;set ip 10.1.28.254;commit

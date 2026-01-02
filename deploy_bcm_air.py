@@ -2830,12 +2830,23 @@ Host bcm
         else:
             for feature_name, config in enabled_features:
                 config_file = self._resolve_versioned_value(config.get("config_file"), bcm_major)
-                if config_file:
-                    actions.append({"type": "cmsh", "name": feature_name, "script": str(config_file)})
                 if feature_name == "bcm_switches":
+                    # Copy per-switch startup.yaml directories before adding switches via cmsh.
+                    switch_configs_dir = self._resolve_versioned_value(config.get("switch_configs_dir"), bcm_major)
+                    if switch_configs_dir:
+                        actions.append(
+                            {
+                                "type": "sync_switch_configs",
+                                "name": feature_name,
+                                "dir": str(switch_configs_dir),
+                            }
+                        )
+
                     ztp_script = self._resolve_versioned_value(config.get("ztp_script"), bcm_major)
                     if ztp_script:
                         actions.insert(len(actions) - 1, {"type": "upload_ztp", "name": feature_name, "path": str(ztp_script)})
+                if config_file:
+                    actions.append({"type": "cmsh", "name": feature_name, "script": str(config_file)})
                 if config.get("reboot_after", False):
                     actions.append({"type": "reboot", "name": f"{feature_name}-reboot"})
 
@@ -2887,6 +2898,21 @@ Host bcm
                     print("    ⚠ Missing path for upload_ztp action")
             elif act_type == "reboot":
                 ok = self._managed_reboot(ssh_config_file)
+                success = ok and success
+                if not ok:
+                    break
+            elif act_type == "sync_switch_configs":
+                dir_val = self._resolve_versioned_value(act.get("dir"), bcm_major)
+                if not dir_val:
+                    print("    ⚠ Missing dir for sync_switch_configs action")
+                    success = False
+                    break
+                local_dir = topology_dir / str(dir_val)
+                if not local_dir.exists() or not local_dir.is_dir():
+                    print(f"    ⚠ switch_configs_dir not found (or not a directory): {local_dir}")
+                    success = False
+                    break
+                ok = self._sync_switch_configs_dir(local_dir, ssh_config_file)
                 success = ok and success
                 if not ok:
                     break
@@ -2966,6 +2992,79 @@ Host bcm
             return True
         except subprocess.CalledProcessError as e:
             print(f"    ⚠ ZTP script upload failed: {e}")
+            return False
+
+    def _sync_switch_configs_dir(self, local_dir: Path, ssh_config_file: str) -> bool:
+        """
+        Sync per-switch config directories to BCM web root so switch ZTP can fetch startup.yaml.
+
+        Local layout:
+          <local_dir>/<switch-hostname>/startup.yaml
+
+        Remote layout:
+          /cm/local/apps/cmd/etc/htdocs/switch/<switch-hostname>/startup.yaml
+
+        This must happen BEFORE the switch cmsh add/commit, because the commit can validate
+        that the referenced startup.yaml exists.
+        """
+        remote_root = "/cm/local/apps/cmd/etc/htdocs/switch"
+        remote_tmp = f"/tmp/switch-configs-{int(time.time())}"
+
+        print(f"    Syncing switch configs: {local_dir} -> {remote_root}")
+
+        try:
+            # Upload to temp location as ubuntu
+            subprocess.run(
+                [
+                    "ssh",
+                    "-F",
+                    ssh_config_file,
+                    f"air-{self.bcm_node_name}",
+                    f"rm -rf {remote_tmp} && mkdir -p {remote_tmp}",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            # Copy directory contents
+            subprocess.run(
+                [
+                    "scp",
+                    "-F",
+                    ssh_config_file,
+                    "-r",
+                    str(local_dir) + "/.",
+                    f"air-{self.bcm_node_name}:{remote_tmp}/",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            # Move into place with sudo and ensure permissions are readable by HTTP server
+            subprocess.run(
+                [
+                    "ssh",
+                    "-F",
+                    ssh_config_file,
+                    f"air-{self.bcm_node_name}",
+                    (
+                        f"sudo mkdir -p {remote_root} && "
+                        f"sudo rsync -a {remote_tmp}/ {remote_root}/ && "
+                        f"sudo find {remote_root} -type d -exec chmod 755 {{}} \\; && "
+                        f"sudo find {remote_root} -type f -exec chmod 644 {{}} \\;"
+                    ),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            print(f"    ✓ Switch configs synced to {remote_root}")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"    ✗ Switch configs sync failed: {e}")
             return False
     
     def _run_wlm_setup(self, config_path, ssh_config_file, wlm_type):
