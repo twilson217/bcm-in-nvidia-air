@@ -1,0 +1,739 @@
+- header:
+    model: vx
+    nvue-api-version: nvue_v1
+    rev-id: 1.0
+    version: Cumulus Linux 5.11.0
+- set:
+    bridge:
+      domain:
+        br_default:
+          vlan:
+            '10':
+              vni:
+                '10': {}
+            '111':
+              vni:
+                '111': {}
+    evpn:
+      enable: on
+      multihoming:
+        enable: on
+        startup-delay: 10
+      route-advertise: {}
+    interface:
+      eth0:
+        description: mgmt-leaf-02:swp38
+        ip:
+          address:
+            10.1.28.17/24: {}
+          gateway:
+            10.1.28.1: {}
+          vrf: mgmt
+        type: eth
+      lo:
+        ip:
+          address:
+            10.1.36.135/32: {}
+        type: loopback
+      swp1:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp2:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp3:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp4:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp5:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp6:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp7:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp8:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp9:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp10:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp11:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp12:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp13:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp14:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp15:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp16:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp17:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp18:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp19:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp20:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp21:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp22:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp23:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp24:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp25:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp26:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp27:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp28:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp29:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp30:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp31:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp32:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp33:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp34:
+        bridge:
+          domain:
+            br_default:
+              access: 10
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: mgmt-leaf-02:eth0
+        type: swp
+      swp35:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp36:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp37:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp38:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp39:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp40:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp41:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp42:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp43:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp44:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp45:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp46:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp47:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp48:
+        bridge:
+          domain:
+            br_default:
+              access: 111
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp49:
+        description: spine-01:swp25s0
+        evpn:
+          multihoming:
+            uplink: on
+        ip:
+          address:
+            10.0.1.205/31: {}
+        type: swp
+      swp51:
+        description: spine-02:swp25s0
+        evpn:
+          multihoming:
+            uplink: on
+        ip:
+          address:
+            10.0.2.205/31: {}
+        type: swp
+      vlan111:
+        description: OOB_VLAN111
+        ip:
+          address:
+            10.1.32.1/24: {}
+          vrf: OOB
+        type: svi
+        vlan: 111
+    nve:
+      vxlan:
+        arp-nd-suppress: on
+        enable: on
+        source:
+          address: 10.1.36.135
+    router:
+      bgp:
+        autonomous-system: 4200001201
+        enable: on
+        router-id: 10.1.36.135
+      policy:
+        route-map:
+          IMPORT_LOOPBACK:
+            rule:
+              '10':
+                action:
+                  permit: {}
+                description: permit_lo_ip
+                match:
+                  interface: lo
+                  type: ipv4
+          RM_W_ECMP:
+            rule:
+              '10':
+                action:
+                  permit: {}
+                description: enable_RM_W_ECMP
+                set:
+                  ext-community-bw: multipaths
+    service:
+      dns:
+        mgmt:
+          server:
+            192.168.200.254: {}
+      ntp:
+        mgmt:
+          server:
+            0.cumulusnetworks.pool.ntp.org: {}
+            1.cumulusnetworks.pool.ntp.org: {}
+            2.cumulusnetworks.pool.ntp.org: {}
+            3.cumulusnetworks.pool.ntp.org: {}
+            192.168.200.254: {}
+    system:
+      aaa:
+        authentication-order:
+          '20':
+            local: {}
+        class:
+          nvapply:
+            action: allow
+            command-path:
+              /:
+                permission: all
+          nvshow:
+            action: allow
+            command-path:
+              /:
+                permission: ro
+          sudo:
+            action: allow
+            command-path:
+              /:
+                permission: all
+        role:
+          nvue-admin:
+            class:
+              nvapply: {}
+          nvue-monitor:
+            class:
+              nvshow: {}
+          system-admin:
+            class:
+              nvapply: {}
+              sudo: {}
+        user:
+          cumulus:
+            full-name: cumulus,,,
+            hashed-password: $6$LTlSN85MytzBcG87$X5MP.rXnJGwMzgsUNprQ/SNqGWR/r2pgaM.uiKZxbiKyfEgZW3esSzVGgTI2Lewx6GgmYuqgMXBX4WgSHydGr/
+            role: system-admin
+      api:
+        state: enabled
+      config:
+        auto-save:
+          state: enabled
+      control-plane:
+        acl:
+          acl-default-dos:
+            inbound: {}
+          acl-default-whitelist:
+            inbound: {}
+      hostname: mgmt-leaf-01
+      reboot:
+        mode: cold
+      ssh-server:
+        state: enabled
+      wjh:
+        channel:
+          forwarding:
+            trigger:
+              l2: {}
+              l3: {}
+              tunnel: {}
+        enable: on
+    vrf:
+      OOB:
+        evpn:
+          enable: on
+          vlan: 1001
+          vni:
+            '100100': {}
+        loopback:
+          ip:
+            address:
+              10.1.36.135/32: {}
+        router:
+          bgp:
+            address-family:
+              ipv4-unicast:
+                enable: on
+                redistribute:
+                  connected:
+                    enable: on
+                route-export:
+                  to-evpn:
+                    enable: on
+              l2vpn-evpn:
+                enable: on
+            autonomous-system: 4200001201
+            enable: on
+            router-id: 10.1.36.135
+      default:
+        evpn:
+          enable: on
+        router:
+          bgp:
+            address-family:
+              ipv4-unicast:
+                enable: on
+                redistribute:
+                  connected:
+                    enable: on
+                    route-map: IMPORT_LOOPBACK
+              l2vpn-evpn:
+                enable: on
+            enable: on
+            neighbor:
+              10.0.1.204:
+                description: To-spine-01:swp25s0
+                peer-group: underlay
+                type: numbered
+              10.0.2.204:
+                description: To-spine-02:swp25s0
+                peer-group: underlay
+                type: numbered
+              10.1.36.129:
+                description: To-spine-01:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.130:
+                description: To-spine-02:lo
+                peer-group: overlay
+                type: numbered
+            path-selection:
+              multipath:
+                aspath-ignore: on
+            peer-group:
+              overlay:
+                address-family:
+                  ipv4-unicast:
+                    enable: off
+                  l2vpn-evpn:
+                    enable: on
+                bfd:
+                  detect-multiplier: 3
+                  enable: on
+                  min-rx-interval: 1000
+                  min-tx-interval: 1000
+                description: overlay_connectivity
+                multihop-ttl: 2
+                remote-as: external
+                update-source: lo
+              underlay:
+                address-family:
+                  ipv4-unicast:
+                    policy:
+                      outbound:
+                        route-map: RM_W_ECMP
+                bfd:
+                  detect-multiplier: 3
+                  enable: on
+                  min-rx-interval: 300
+                  min-tx-interval: 300
+                description: underlay_connectivity
+                remote-as: external

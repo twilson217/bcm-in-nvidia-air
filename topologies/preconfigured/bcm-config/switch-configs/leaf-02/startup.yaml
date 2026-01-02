@@ -1,0 +1,424 @@
+- header:
+    model: vx
+    nvue-api-version: nvue_v1
+    rev-id: 1.0
+    version: Cumulus Linux 5.11.0
+- set:
+    bridge:
+      domain:
+        br_default:
+          stp:
+            priority: 28672
+            state:
+              up: {}
+          vlan:
+            '100':
+              vni:
+                '100': {}
+            '101':
+              vni:
+                '101': {}
+    evpn:
+      enable: on
+      multihoming:
+        enable: on
+        startup-delay: 10
+      route-advertise: {}
+    interface:
+      bond1:
+        bond:
+          member:
+            swp31: {}
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: bcm-01
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 31
+              mac-address: 02:00:00:00:01:01
+        type: bond
+      bond2:
+        bond:
+          member:
+            swp32: {}
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: bcm-02
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 32
+              mac-address: 02:00:00:00:01:02
+        type: bond
+      eth0:
+        description: mgmt-leaf-02:swp31
+        ip:
+          address:
+            10.1.28.14/24: {}
+          gateway:
+            10.1.28.1: {}
+          vrf: mgmt
+        type: eth
+      lo:
+        ip:
+          address:
+            10.1.36.132/32: {}
+        type: loopback
+      swp1:
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp2:
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp3:
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp4:
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        type: swp
+      swp31:
+        type: swp
+      swp32:
+        type: swp
+      swp61:
+        description: spine-01:swp3
+        evpn:
+          multihoming:
+            uplink: on
+        ip:
+          address:
+            10.0.1.197/31: {}
+        type: swp
+      swp62:
+        description: spine-01:swp4
+        evpn:
+          multihoming:
+            uplink: on
+        ip:
+          address:
+            10.0.1.199/31: {}
+        type: swp
+      swp63:
+        description: spine-02:swp3
+        evpn:
+          multihoming:
+            uplink: on
+        ip:
+          address:
+            10.0.2.197/31: {}
+        type: swp
+      swp64:
+        description: spine-02:swp4
+        evpn:
+          multihoming:
+            uplink: on
+        ip:
+          address:
+            10.0.2.199/31: {}
+        type: swp
+      vlan100:
+        description: INTERNALNET_192.168.200.0/24
+        ip:
+          address:
+            192.168.200.3/24: {}
+          vrf: INBAND
+          vrr:
+            address:
+              192.168.200.1/24: {}
+            enable: on
+            state:
+              up: {}
+        type: svi
+        vlan: 100
+      vlan101:
+        description: FABRIC_VLAN101
+        ip:
+          address:
+            10.1.37.3/24: {}
+          vrf: INBAND
+          vrr:
+            address:
+              10.1.37.1/24: {}
+            enable: on
+            state:
+              up: {}
+        type: svi
+        vlan: 101
+    nve:
+      vxlan:
+        arp-nd-suppress: on
+        enable: on
+        source:
+          address: 10.1.36.132
+    qos:
+      roce:
+        enable: on
+        mode: lossless
+    router:
+      bgp:
+        autonomous-system: 4200001101
+        enable: on
+        graceful-restart:
+          mode: full
+        router-id: 10.1.36.132
+      policy:
+        route-map:
+          IMPORT_LOOPBACK:
+            rule:
+              '10':
+                action:
+                  permit: {}
+                description: permit_lo_ip
+                match:
+                  interface: lo
+                  type: ipv4
+          RM_W_ECMP:
+            rule:
+              '10':
+                action:
+                  permit: {}
+                description: enable_RM_W_ECMP
+                set:
+                  ext-community-bw: multipaths
+      vrr:
+        enable: on
+    service:
+      dhcp-relay:
+        INBAND:
+          interface:
+            vlan100: {}
+            vlan101: {}
+          server:
+            192.168.200.252: {}
+            192.168.200.253: {}
+            192.168.200.254: {}
+          source-ip: giaddress
+      dns:
+        mgmt:
+          server:
+            192.168.200.254: {}
+      ntp:
+        mgmt:
+          server:
+            0.cumulusnetworks.pool.ntp.org: {}
+            1.cumulusnetworks.pool.ntp.org: {}
+            2.cumulusnetworks.pool.ntp.org: {}
+            3.cumulusnetworks.pool.ntp.org: {}
+            192.168.200.254: {}
+    system:
+      aaa:
+        authentication-order:
+          '20':
+            local: {}
+        class:
+          nvapply:
+            action: allow
+            command-path:
+              /:
+                permission: all
+          nvshow:
+            action: allow
+            command-path:
+              /:
+                permission: ro
+          sudo:
+            action: allow
+            command-path:
+              /:
+                permission: all
+        role:
+          nvue-admin:
+            class:
+              nvapply: {}
+          nvue-monitor:
+            class:
+              nvshow: {}
+          system-admin:
+            class:
+              nvapply: {}
+              sudo: {}
+        user:
+          cumulus:
+            full-name: cumulus,,,
+            hashed-password: $6$0.K63G33My6/qoUX$AkVT5QPoANDLKeWENjZv9dEbl0olSKHh12ARYO2PLSU7wg5TMnjG7UnnwCVIu6oQ/aZPqLFPjvteqRWh2nlXx1
+            role: system-admin
+      api:
+        state: enabled
+      config:
+        auto-save:
+          state: enabled
+      control-plane:
+        acl:
+          acl-default-dos:
+            inbound: {}
+          acl-default-whitelist:
+            inbound: {}
+      hostname: leaf-02
+      reboot:
+        mode: cold
+      ssh-server:
+        state: enabled
+        strict: disabled
+      wjh:
+        channel:
+          forwarding:
+            trigger:
+              l2: {}
+              l3: {}
+              tunnel: {}
+        enable: on
+    vrf:
+      INBAND:
+        evpn:
+          enable: on
+          vlan: 2001
+          vni:
+            '200100': {}
+        loopback:
+          ip:
+            address:
+              10.1.36.132/32: {}
+        router:
+          bgp:
+            address-family:
+              ipv4-unicast:
+                enable: on
+                redistribute:
+                  connected:
+                    enable: on
+                route-export:
+                  to-evpn:
+                    enable: on
+                route-import:
+                  from-vrf:
+                    enable: on
+                    list:
+                      EXIT: {}
+                      OOB: {}
+              l2vpn-evpn:
+                enable: on
+            autonomous-system: 4200001101
+            enable: on
+            route-import:
+              from-evpn:
+                route-target:
+                  61205:200100: {}
+                  61206:200100: {}
+            router-id: 10.1.36.132
+      default:
+        evpn:
+          enable: on
+        router:
+          bgp:
+            address-family:
+              ipv4-unicast:
+                enable: on
+                redistribute:
+                  connected:
+                    enable: on
+                    route-map: IMPORT_LOOPBACK
+              l2vpn-evpn:
+                enable: on
+            enable: on
+            neighbor:
+              10.0.1.196:
+                description: To-spine-01:swp3
+                peer-group: underlay
+                type: numbered
+              10.0.1.198:
+                description: To-spine-01:swp4
+                peer-group: underlay
+                type: numbered
+              10.0.2.196:
+                description: To-spine-02:swp3
+                peer-group: underlay
+                type: numbered
+              10.0.2.198:
+                description: To-spine-02:swp4
+                peer-group: underlay
+                type: numbered
+              10.1.36.129:
+                description: To-spine-01:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.130:
+                description: To-spine-02:lo
+                peer-group: overlay
+                type: numbered
+            path-selection:
+              multipath:
+                aspath-ignore: on
+            peer-group:
+              overlay:
+                address-family:
+                  ipv4-unicast:
+                    enable: off
+                  l2vpn-evpn:
+                    enable: on
+                bfd:
+                  detect-multiplier: 3
+                  enable: on
+                  min-rx-interval: 1000
+                  min-tx-interval: 1000
+                description: overlay_connectivity
+                multihop-ttl: 2
+                remote-as: external
+                update-source: lo
+              underlay:
+                address-family:
+                  ipv4-unicast:
+                    policy:
+                      outbound:
+                        route-map: RM_W_ECMP
+                bfd:
+                  detect-multiplier: 3
+                  enable: on
+                  min-rx-interval: 300
+                  min-tx-interval: 300
+                description: underlay_connectivity
+                remote-as: external

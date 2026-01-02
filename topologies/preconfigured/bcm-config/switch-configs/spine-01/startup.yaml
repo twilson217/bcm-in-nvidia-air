@@ -1,0 +1,304 @@
+- header:
+    model: vx
+    nvue-api-version: nvue_v1
+    rev-id: 1.0
+    version: Cumulus Linux 5.11.0
+- set:
+    interface:
+      eth0:
+        description: mgmt-leaf-02:swp26
+        ip:
+          address:
+            10.1.28.11/24: {}
+          gateway:
+            10.1.28.1: {}
+          vrf: mgmt
+        type: eth
+      lo:
+        ip:
+          address:
+            10.1.36.129/32: {}
+        type: loopback
+      swp1:
+        description: leaf-01:swp61
+        ip:
+          address:
+            10.0.1.192/31: {}
+        type: swp
+      swp2:
+        description: leaf-01:swp62
+        ip:
+          address:
+            10.0.1.194/31: {}
+        type: swp
+      swp3:
+        description: leaf-02:swp61
+        ip:
+          address:
+            10.0.1.196/31: {}
+        type: swp
+      swp4:
+        description: leaf-02:swp62
+        ip:
+          address:
+            10.0.1.198/31: {}
+        type: swp
+      swp5:
+        description: fleaf-01:swp1
+        ip:
+          address:
+            10.0.1.200/31: {}
+        type: swp
+      swp5s0:
+        type: swp
+      swp5s1:
+        type: swp
+      swp6:
+        description: fleaf-02:swp1
+        ip:
+          address:
+            10.0.1.202/31: {}
+        type: swp
+      swp25:
+        type: swp
+      swp25s0:
+        description: mgmt-leaf-01:swp49
+        ip:
+          address:
+            10.0.1.204/31: {}
+        type: swp
+      swp25s1:
+        type: swp
+      swp26:
+        type: swp
+      swp26s0:
+        description: mgmt-leaf-02:swp49
+        ip:
+          address:
+            10.0.1.208/31: {}
+        type: swp
+      swp26s1:
+        type: swp
+      swp27:
+        type: swp
+      swp27s0:
+        type: swp
+      swp27s1:
+        type: swp
+      swp28:
+        type: swp
+      swp29:
+        type: swp
+      swp29s0:
+        type: swp
+      swp29s1:
+        type: swp
+    qos:
+      roce:
+        enable: on
+        mode: lossless
+    router:
+      bgp:
+        autonomous-system: 4200001001
+        enable: on
+        graceful-restart:
+          mode: full
+        router-id: 10.1.36.129
+      policy:
+        route-map:
+          IMPORT_LOOPBACK:
+            rule:
+              '10':
+                action:
+                  permit: {}
+                description: permit_lo_ip
+                match:
+                  interface: lo
+                  type: ipv4
+          RM_W_ECMP:
+            rule:
+              '10':
+                action:
+                  permit: {}
+                description: enable_RM_W_ECMP
+                set:
+                  ext-community-bw: multipaths
+    service:
+      dns:
+        mgmt:
+          server:
+            192.168.200.254: {}
+      ntp:
+        mgmt:
+          server:
+            0.cumulusnetworks.pool.ntp.org: {}
+            1.cumulusnetworks.pool.ntp.org: {}
+            2.cumulusnetworks.pool.ntp.org: {}
+            3.cumulusnetworks.pool.ntp.org: {}
+            192.168.200.254: {}
+    system:
+      aaa:
+        authentication-order:
+          '20':
+            local: {}
+        class:
+          nvapply:
+            action: allow
+            command-path:
+              /:
+                permission: all
+          nvshow:
+            action: allow
+            command-path:
+              /:
+                permission: ro
+          sudo:
+            action: allow
+            command-path:
+              /:
+                permission: all
+        role:
+          nvue-admin:
+            class:
+              nvapply: {}
+          nvue-monitor:
+            class:
+              nvshow: {}
+          system-admin:
+            class:
+              nvapply: {}
+              sudo: {}
+        user:
+          cumulus:
+            full-name: cumulus,,,
+            hashed-password: $6$w7D4Y5x0CYu9LD2H$LNWUcTqXq03/wOTXBb/ftt8YGl.Up69qkyur.yO2sGe0zh/VVgzHdnybgJF0yonI/oZcLQ8rOVkWdPFWgkPEv/
+            role: system-admin
+      api:
+        state: enabled
+      config:
+        auto-save:
+          state: enabled
+      control-plane:
+        acl:
+          acl-default-dos:
+            inbound: {}
+          acl-default-whitelist:
+            inbound: {}
+      hostname: spine-01
+      reboot:
+        mode: cold
+      ssh-server:
+        state: enabled
+      wjh:
+        channel:
+          forwarding:
+            trigger:
+              l2: {}
+              l3: {}
+              tunnel: {}
+        enable: on
+    vrf:
+      default:
+        evpn:
+          enable: on
+        router:
+          bgp:
+            address-family:
+              ipv4-unicast:
+                enable: on
+                redistribute:
+                  connected:
+                    enable: on
+                    route-map: IMPORT_LOOPBACK
+              l2vpn-evpn:
+                enable: on
+            enable: on
+            neighbor:
+              10.0.1.193:
+                description: To-leaf-01:swp61
+                peer-group: underlay
+                type: numbered
+              10.0.1.195:
+                description: To-leaf-01:swp62
+                peer-group: underlay
+                type: numbered
+              10.0.1.197:
+                description: To-leaf-02:swp61
+                peer-group: underlay
+                type: numbered
+              10.0.1.199:
+                description: To-leaf-02:swp62
+                peer-group: underlay
+                type: numbered
+              10.0.1.201:
+                description: To-fleaf-01:swp1
+                peer-group: underlay
+                type: numbered
+              10.0.1.203:
+                description: To-fleaf-02:swp1
+                peer-group: underlay
+                type: numbered
+              10.0.1.205:
+                description: To-mgmt-leaf-01:swp49
+                peer-group: underlay
+                type: numbered
+              10.0.1.209:
+                description: To-mgmt-leaf-02:swp49
+                peer-group: underlay
+                type: numbered
+              10.1.36.131:
+                description: To-leaf-01:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.132:
+                description: To-leaf-02:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.133:
+                description: To-fleaf-01:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.134:
+                description: To-fleaf-02:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.135:
+                description: To-mgmt-leaf-01:lo
+                peer-group: overlay
+                type: numbered
+              10.1.36.139:
+                description: To-mgmt-leaf-02:lo
+                peer-group: overlay
+                type: numbered
+            path-selection:
+              multipath:
+                aspath-ignore: on
+            peer-group:
+              overlay:
+                address-family:
+                  ipv4-unicast:
+                    enable: off
+                  l2vpn-evpn:
+                    enable: on
+                bfd:
+                  detect-multiplier: 3
+                  enable: on
+                  min-rx-interval: 1000
+                  min-tx-interval: 1000
+                description: overlay_connectivity
+                multihop-ttl: 2
+                remote-as: external
+                update-source: lo
+              underlay:
+                address-family:
+                  ipv4-unicast:
+                    policy:
+                      outbound:
+                        route-map: RM_W_ECMP
+                bfd:
+                  detect-multiplier: 3
+                  enable: on
+                  min-rx-interval: 300
+                  min-tx-interval: 300
+                description: underlay_connectivity
+                remote-as: external

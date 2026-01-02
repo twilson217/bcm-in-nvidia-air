@@ -152,6 +152,9 @@ class ProgressTracker:
 
 class AirBCMDeployer:
     """Automate BCM deployment on NVIDIA Air"""
+
+    # Prefer explicit binary path to avoid relying on PATH/module initialization.
+    CMSH_BIN = "/cm/local/apps/cmd/bin/cmsh"
     
     def __init__(self, api_base_url="https://air.nvidia.com", api_token=None, username=None, 
                  non_interactive=False, progress_tracker=None,
@@ -2652,7 +2655,7 @@ Host bcm
         print(f"  Password: {self.default_password}")
         
         print(f"\nBCM CLI:")
-        print(f"  cmsh                    # Enter BCM shell")
+        print(f"  {self.CMSH_BIN}                    # Enter BCM shell")
         print(f"  device list             # List managed devices")
         
         print(f"\nBCM GUI:")
@@ -2942,7 +2945,14 @@ Host bcm
         return success
     
     def _run_cmsh_script(self, local_script_path, ssh_config_file):
-        """Upload and execute a cmsh script on the BCM head node"""
+        """
+        Upload and execute a cmsh command script on the BCM head node.
+
+        Expected format: one command per line, typically:
+          cmsh -c "<command>"
+
+        We intentionally do NOT rely on PATH for cmsh; we rewrite a leading "cmsh " to use CMSH_BIN.
+        """
         remote_script = f"/tmp/{local_script_path.name}"
         
         try:
@@ -2953,18 +2963,34 @@ Host bcm
                 f"air-{self.bcm_node_name}:{remote_script}"
             ], check=True, capture_output=True)
             
-            # Execute with cmsh
+            # Execute line-by-line (one cmsh command per line).
+            # We use bash to keep quoting intact for cmsh -c "...".
             result = subprocess.run([
                 'ssh', '-F', ssh_config_file,
                 f"air-{self.bcm_node_name}",
-                f"cmsh -f {remote_script}"
+                (
+                    "bash -lc '"
+                    "set -euo pipefail; "
+                    f"CMSH_BIN={self.CMSH_BIN!s}; "
+                    f"f={remote_script!s}; "
+                    "while IFS= read -r line || [ -n \"$line\" ]; do "
+                    "  s=\"$(echo \"$line\" | sed -e \"s/^[[:space:]]*//\")\"; "
+                    "  if [[ -z \"$s\" ]] || [[ \"$s\" == \\#* ]]; then continue; fi; "
+                    "  if [[ \"$s\" == cmsh\\ * ]]; then s=\"$CMSH_BIN ${s#cmsh }\"; fi; "
+                    "  echo \"[cmsh] $s\"; "
+                    "  eval \"$s\"; "
+                    "done < \"$f\"'"
+                )
             ], capture_output=True, text=True)
             
             if result.returncode == 0:
                 print(f"    ✓ {local_script_path.name} executed")
                 return True
             else:
-                print(f"    ✗ {local_script_path.name} failed: {result.stderr}")
+                err = (result.stderr or "").strip()
+                out = (result.stdout or "").strip()
+                msg = err or out or "(no output)"
+                print(f"    ✗ {local_script_path.name} failed: {msg}")
                 return False
         except subprocess.CalledProcessError as e:
             print(f"    ✗ Error running {local_script_path.name}: {e}")
