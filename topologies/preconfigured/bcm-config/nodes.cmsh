@@ -1,25 +1,7 @@
 # nodes.cmsh - Add compute nodes to BCM inventory
-# This file is executed with: cmsh -f nodes.cmsh
 # Uncomment and modify the examples below as needed.
 
-# Example: Add a single compute node
-# device
-# add physicalnode node001
-# set node001 category default
-# set node001 mac 00:11:22:33:44:55
-# set node001 ip 192.168.200.1
-# commit
-
-# Example: Add multiple compute nodes with a loop
-# device
-# foreach -n node00[1-4] (add physicalnode %%N; set %%N category default)
-# commit
-
-# Example: Configure node properties
-# device
-# use node001
-# set bootprofile default
-# set installmode AUTO
-# set provisioninginterface eth0
-# commit
-
+cmsh -c "device;add physicalnode cpu-01 10.1.37.11 bond0;set category default;interfaces;remove bootif;add physical eth0;set mac 48:B0:2D:45:D8:A9;add physical eth1;set mac 48:B0:2D:B6:18:31;use bond0;set network hpcnet;set interfaces eth0 eth1;set ip 10.1.37.11;..;..;set provisioninginterface bond0;set mac 48:B0:2D:45:D8:A9;commit"
+cmsh -c "device;add physicalnode cpu-02 10.1.37.12 bond0;set category default;interfaces;remove bootif;add physical eth0;set mac 48:B0:2D:5D:15:E8;add physical eth1;set mac 48:B0:2D:1C:C9:74;use bond0;set network hpcnet;set interfaces eth0 eth1;set ip 10.1.37.12;..;..;set provisioninginterface bond0;set mac 48:B0:2D:5D:15:E8;commit"
+cmsh -c "device;add physicalnode cpu-03 10.1.37.13 bond0;set category default;interfaces;remove bootif;add physical eth0;set mac 48:B0:2D:F4:5B:37;add physical eth1;set mac 48:B0:2D:30:39:47;use bond0;set network hpcnet;set interfaces eth0 eth1;set ip 10.1.37.13;..;..;set provisioninginterface bond0;set mac 48:B0:2D:F4:5B:37;commit"
+cmsh -c "device;add physicalnode cpu-04 10.1.37.14 bond0;set category default;interfaces;remove bootif;add physical eth0;set mac 48:B0:2D:E7:55:03;add physical eth1;set mac 48:B0:2D:E4:61:61;use bond0;set network hpcnet;set interfaces eth0 eth1;set ip 10.1.37.14;..;..;set provisioninginterface bond0;set mac 48:B0:2D:E7:55:03;commit"

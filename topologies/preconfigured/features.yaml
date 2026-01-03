@@ -10,22 +10,23 @@ bcm_networking:
 
 # BCM Nodes - Add compute nodes to BCM inventory
 bcm_nodes:
-  enabled: false
+  enabled: true
   config_file: bcm-config/nodes.cmsh
 
 # BCM Switches - Add switches to BCM and configure ZTP
 bcm_switches:
   enabled: true
   config_file:
-    "10": bcm-config/switches_v10.cmsh
-    # "11": bcm-config/switches_v11.cmsh
+    "10": bcm-config/switches_v10.cmsh     # Only BCM 10 tested so far.
+    # "11": bcm-config/switches_v11.cmsh   # Not yet supported by the deployment script.
   # switch_configs: Optional directory containing per-switch configuration files
   switch_configs_dir: bcm-config/switch-configs/
   reboot_switches_after: true
 
 # Workload Manager - Configure Slurm or Kubernetes
-workload_manager:
-  enabled: false
-  type: slurm  # Options: slurm, kubernetes
-  config_file: bcm-config/cm-wlm-setup.conf
+# Note: This is just a placeholder for future use.
+# workload_manager:
+#  enabled: false
+#   type: slurm  # Options: slurm, kubernetes
+#   config_file: bcm-config/cm-wlm-setup.conf
 
