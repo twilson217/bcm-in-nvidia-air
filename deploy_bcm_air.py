@@ -2851,6 +2851,18 @@ Host bcm
                         actions.insert(len(actions) - 1, {"type": "upload_ztp", "name": feature_name, "path": str(ztp_script)})
                 if config_file:
                     actions.append({"type": "cmsh", "name": feature_name, "script": str(config_file)})
+                if feature_name == "bcm_switches" and config.get("reboot_switches_after", False):
+                    # Reset (power-cycle) switches via the Air API so they make a fresh attempt at ZTP.
+                    # We treat "switches" as:
+                    #  - explicit subdirectories under switch_configs_dir (preferred), else
+                    #  - nodes in topology.json whose OS looks like a network OS (cumulus/sonic/nxos/etc)
+                    actions.append(
+                        {
+                            "type": "reset_switches",
+                            "name": feature_name,
+                            "switch_configs_dir": str(switch_configs_dir) if switch_configs_dir else "",
+                        }
+                    )
                 if config.get("reboot_after", False):
                     actions.append({"type": "reboot", "name": f"{feature_name}-reboot"})
 
@@ -2920,6 +2932,13 @@ Host bcm
                 success = ok and success
                 if not ok:
                     break
+            elif act_type == "reset_switches":
+                # Reset all switch nodes via Air API to force a fresh ZTP attempt.
+                switch_cfg_dir = (act.get("switch_configs_dir") or "").strip()
+                ok = self._reset_switch_nodes_via_air(topology_dir=topology_dir, switch_configs_dir=switch_cfg_dir)
+                success = ok and success
+                if not ok:
+                    break
             elif act_type == "wlm_setup":
                 # Optional explicit action type (kept for future expansions)
                 cfg = self._resolve_versioned_value(act.get("config"), bcm_major)
@@ -2944,6 +2963,133 @@ Host bcm
             print("\n  ⚠ Some features had errors (see above)")
         
         return success
+
+    def _detect_switch_node_names(self, topology_dir: Path, switch_configs_dir: str | None) -> list[str]:
+        """
+        Best-effort discovery of switch node names for post-install switch reset.
+
+        Priority:
+          1) Directory names under switch_configs_dir (e.g. bcm-config/switch-configs/<switch-hostname>/)
+          2) Topology node OS name heuristics (cumulus/sonic/nxos/eos/junos/onyx)
+        """
+        names: list[str] = []
+
+        # 1) Explicit list from switch configs dir
+        if switch_configs_dir:
+            try:
+                local_dir = topology_dir / switch_configs_dir
+                if local_dir.exists() and local_dir.is_dir():
+                    for p in sorted(local_dir.iterdir()):
+                        if p.is_dir():
+                            names.append(p.name)
+            except Exception:
+                pass
+
+        if names:
+            return names
+
+        # 2) Heuristic from topology.json node OS
+        try:
+            topo_json = topology_dir / "topology.json"
+            if topo_json.exists():
+                data = json.loads(topo_json.read_text())
+                nodes = (data.get("nodes") or {}).get("node") or {}
+                os_markers = ("cumulus", "sonic", "nxos", "eos", "junos", "onyx")
+                for node_name, node_cfg in nodes.items():
+                    os_name = str((node_cfg or {}).get("os") or "").lower()
+                    if any(m in os_name for m in os_markers):
+                        names.append(str(node_name))
+        except Exception:
+            pass
+
+        return sorted(set(names))
+
+    def _list_simulation_nodes_v2(self) -> list[dict]:
+        """
+        List sim nodes via the v2 endpoint:
+          GET /api/v2/simulations/nodes/?simulation=<sim_id>
+        """
+        base = self.api_base_url.rstrip("/")
+        r = requests.get(
+            f"{base}/api/v2/simulations/nodes/",
+            headers=self.headers,
+            params={"simulation": self.simulation_id},
+            timeout=30,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, list):
+            return data
+        return data.get("results", []) or []
+
+    def _reset_switch_nodes_via_air(self, topology_dir: Path, switch_configs_dir: str | None = None) -> bool:
+        """
+        Reset switch nodes via Air API so they retry ZTP.
+
+        Uses:
+          POST /api/v2/simulations/nodes/{id}/control/ {"action": "reset"}
+        """
+        if not self.simulation_id:
+            print("    ✗ Cannot reset switches: simulation_id is not set")
+            return False
+
+        switch_names = self._detect_switch_node_names(topology_dir=topology_dir, switch_configs_dir=switch_configs_dir)
+        if not switch_names:
+            print("    ⚠ No switch nodes detected (no switch configs dir entries and no switch OS nodes found in topology.json)")
+            return True  # Nothing to do
+
+        print(f"    Switch nodes to reset ({len(switch_names)}): {', '.join(switch_names)}")
+
+        try:
+            sim_nodes = self._list_simulation_nodes_v2()
+        except Exception as e:
+            print(f"    ✗ Could not list simulation nodes for reset: {e}")
+            return False
+
+        name_to_id: dict[str, str] = {}
+        for n in sim_nodes:
+            try:
+                nm = str(n.get("name") or "")
+                nid = n.get("id")
+                if nm and nid:
+                    name_to_id[nm] = str(nid)
+            except Exception:
+                continue
+
+        missing = [n for n in switch_names if n not in name_to_id]
+        if missing:
+            print(f"    ⚠ Some switch names were not found in the simulation node list: {', '.join(missing)}")
+
+        target_ids = [(n, name_to_id[n]) for n in switch_names if n in name_to_id]
+        if not target_ids:
+            print("    ⚠ No matching switch nodes found to reset")
+            return False
+
+        base = self.api_base_url.rstrip("/")
+        ok = True
+        for nm, nid in target_ids:
+            try:
+                print(f"    Resetting {nm} ({nid})...")
+                r = requests.post(
+                    f"{base}/api/v2/simulations/nodes/{nid}/control/",
+                    headers=self.headers,
+                    json={"action": "reset"},
+                    timeout=30,
+                )
+                if r.status_code not in (200, 201, 202):
+                    print(f"      ✗ Reset failed ({r.status_code}): {r.text[:200]}")
+                    ok = False
+                else:
+                    print("      ✓ Reset requested")
+            except Exception as e:
+                print(f"      ✗ Reset error: {e}")
+                ok = False
+
+        if ok:
+            print("    ✓ Switch reset requests submitted (switches should reboot and retry ZTP shortly)")
+        else:
+            print("    ⚠ One or more switch reset requests failed")
+        return ok
     
     def _run_cmsh_script(self, local_script_path, ssh_config_file):
         """
