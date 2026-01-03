@@ -8,10 +8,6 @@
       eth0:
         description: mgmt-leaf-02:swp26
         ip:
-          address:
-            10.1.28.11/24: {}
-          gateway:
-            10.1.28.1: {}
           vrf: mgmt
         type: eth
       lo:

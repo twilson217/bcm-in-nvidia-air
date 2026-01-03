@@ -1,3 +1,4 @@
+[sudo] password for cumulus: 
 - header:
     model: vx
     nvue-api-version: nvue_v1
@@ -70,10 +71,6 @@
       eth0:
         description: mgmt-leaf-02:swp31
         ip:
-          address:
-            10.1.28.14/24: {}
-          gateway:
-            10.1.28.1: {}
           vrf: mgmt
         type: eth
       lo:

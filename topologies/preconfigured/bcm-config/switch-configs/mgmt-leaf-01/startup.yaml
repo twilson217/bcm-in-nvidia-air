@@ -24,10 +24,6 @@
       eth0:
         description: mgmt-leaf-02:swp38
         ip:
-          address:
-            10.1.28.17/24: {}
-          gateway:
-            10.1.28.1: {}
           vrf: mgmt
         type: eth
       lo:

@@ -1,6 +1,8 @@
 # switches_v10.cmsh - Add switches to BCM 10.x and configure ZTP
 # Uncomment and modify the examples below as needed.
 
+cmsh -c "device;add switch bootstrap;set mac 48:B0:2D:00:00:21;set network mgmtnet;set ip 10.1.28.10;set hasclientdaemon yes;set cumulusmode file;set cumulusfile startup.yaml;ztpsettings;set enableapi yes;keyvaluesettings;set CMD_VRF mgmt;commit"
+cmsh -c "device initialize bootstrap"
 cmsh -c "device;add switch mgmt-leaf-01;set mac 48:B0:2D:00:00:1E;set network mgmtnet;set ip 10.1.28.13;set hasclientdaemon yes;set cumulusmode file;set cumulusfile startup.yaml;ztpsettings;set enableapi yes;keyvaluesettings;set CMD_VRF mgmt;commit"
 cmsh -c "device initialize mgmt-leaf-01"
 cmsh -c "device;add switch mgmt-leaf-02;set mac 48:B0:2D:00:00:2E;set network mgmtnet;set ip 10.1.28.14;set hasclientdaemon yes;set cumulusmode file;set cumulusfile startup.yaml;ztpsettings;set enableapi yes;keyvaluesettings;set CMD_VRF mgmt;commit"
