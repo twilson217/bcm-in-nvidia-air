@@ -2879,6 +2879,18 @@ Host bcm
 
         print(f"  Planned actions: {len(actions)}")
 
+        # Be explicit about whether we're resuming mid-stream.
+        # This avoids confusion when users re-run --post-install-only and only see later actions execute.
+        if idx < 0:
+            idx = 0
+        if idx >= len(actions):
+            print(f"  ⚠ Saved post-install action index ({idx}) is out of range for current plan (len={len(actions)}); restarting from action 1")
+            idx = 0
+            if progress:
+                progress.set(post_install_action_index=0)
+        elif idx > 0:
+            print(f"  ℹ Resuming post-install at action {idx+1}/{len(actions)} (use --reset-post-install to rerun from the beginning)")
+
         for i in range(idx, len(actions)):
             act = actions[i]
             act_type = (act.get("type") or "").strip()
