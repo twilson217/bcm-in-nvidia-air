@@ -345,6 +345,12 @@
                   61205:200100: {}
                   61206:200100: {}
             router-id: 10.1.36.132
+          static:
+            default:
+              address-family: ipv4-unicast
+              via:
+                192.168.200.254:
+                  type: ipv4-address
       default:
         evpn:
           enable: on
