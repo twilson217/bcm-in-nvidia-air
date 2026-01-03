@@ -21,6 +21,7 @@ bcm_switches:
     # "11": bcm-config/switches_v11.cmsh
   # switch_configs: Optional directory containing per-switch configuration files
   switch_configs_dir: bcm-config/switch-configs/
+  reboot_switches_after: true
 
 # Workload Manager - Configure Slurm or Kubernetes
 workload_manager:

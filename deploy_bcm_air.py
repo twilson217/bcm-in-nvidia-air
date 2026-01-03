@@ -3216,19 +3216,26 @@ Host bcm
             )
 
             # Move into place with sudo and ensure permissions are readable by HTTP server
+            # Prefer rsync (fast, robust). If rsync isn't available on the BCM node, fall back to cp -a.
+            move_cmd = (
+                "bash -lc 'set -euo pipefail; "
+                f"sudo mkdir -p {remote_root!s}; "
+                f"if command -v rsync >/dev/null 2>&1; then "
+                f"  sudo rsync -a {remote_tmp!s}/ {remote_root!s}/; "
+                f"else "
+                f"  sudo cp -a {remote_tmp!s}/. {remote_root!s}/; "
+                f"fi; "
+                f"sudo find {remote_root!s} -type d -exec chmod 755 {{}} \\;; "
+                f"sudo find {remote_root!s} -type f -exec chmod 644 {{}} \\;; "
+                # Verify: show how many startup.yaml files are present after sync
+                f"c=$(sudo find {remote_root!s} -maxdepth 2 -name startup.yaml -type f | wc -l); "
+                "echo \"SYNC_STARTUP_YAML_COUNT=$c\"; "
+                "if [ \"$c\" -eq 0 ]; then "
+                f"  echo \"WARN: No startup.yaml found under {remote_root!s} (did you create per-switch subdirs under {local_dir.name}/?)\" >&2; "
+                "fi'"
+            )
             subprocess.run(
-                [
-                    "ssh",
-                    "-F",
-                    ssh_config_file,
-                    f"air-{self.bcm_node_name}",
-                    (
-                        f"sudo mkdir -p {remote_root} && "
-                        f"sudo rsync -a {remote_tmp}/ {remote_root}/ && "
-                        f"sudo find {remote_root} -type d -exec chmod 755 {{}} \\; && "
-                        f"sudo find {remote_root} -type f -exec chmod 644 {{}} \\;"
-                    ),
-                ],
+                ["ssh", "-F", ssh_config_file, f"air-{self.bcm_node_name}", move_cmd],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -3237,7 +3244,13 @@ Host bcm
             print(f"    ✓ Switch configs synced to {remote_root}")
             return True
         except subprocess.CalledProcessError as e:
+            err = (e.stderr or "").strip()
+            out = (e.stdout or "").strip()
             print(f"    ✗ Switch configs sync failed: {e}")
+            if out:
+                print(f"      stdout: {out[-400:]}")
+            if err:
+                print(f"      stderr: {err[-400:]}")
             return False
     
     def _run_wlm_setup(self, config_path, ssh_config_file, wlm_type):
