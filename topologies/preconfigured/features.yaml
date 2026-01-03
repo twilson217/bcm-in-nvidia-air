@@ -15,7 +15,7 @@ bcm_nodes:
 
 # BCM Switches - Add switches to BCM and configure ZTP
 bcm_switches:
-  enabled: false
+  enabled: true
   config_file:
     "10": bcm-config/switches_v10.cmsh
     # "11": bcm-config/switches_v11.cmsh
