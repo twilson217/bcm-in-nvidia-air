@@ -3344,13 +3344,114 @@ Examples:
 
         # Fast path: run post-install only (no sim creation, no iso upload, no ansible)
         if args.post_install_only:
+            # Option A: use saved progress.json
             saved_topology_dir = progress.get('topology_dir')
             ssh_config_file = progress.get('ssh_config_file')
             bcm_version = progress.get('bcm_version')
+
+            # Option B: re-derive connection info from --sim-id (useful if progress.json was cleared)
+            if args.sim_id:
+                if not args.bcm_version:
+                    print("\n✗ --post-install-only with --sim-id requires --bcm-version (used for 10/11-specific config selection).")
+                    return 2
+
+                # Use CLI-provided topology to locate features.yaml/scripts
+                feature_topology_dir = Path(args.topology_path)
+                if not feature_topology_dir.exists():
+                    print(f"\n✗ Topology dir not found: {feature_topology_dir}")
+                    return 2
+
+                bcm_version, _, _ = deployer.prompt_bcm_version(args.bcm_version)
+                deployer.simulation_id = args.sim_id
+
+                # Determine target node (reuse existing --primary/--secondary behavior)
+                if args.secondary:
+                    deployer.bcm_node_name = args.secondary
+                elif args.primary:
+                    deployer.bcm_node_name = args.primary
+                else:
+                    # Fall back to heuristic selection for primary (same logic as install path)
+                    resp = requests.get(
+                        f"{api_base_url.rstrip('/')}/api/v2/simulations/nodes/",
+                        headers=deployer.headers,
+                        params={"simulation": deployer.simulation_id},
+                        timeout=30,
+                    )
+                    nodes = []
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        nodes = data.get("results", data) if isinstance(data, dict) else data
+                    names = [n.get("name") for n in nodes if isinstance(n, dict) and isinstance(n.get("name"), str)]
+                    bcmish = [n for n in names if "bcm" in n.lower()]
+                    starts = [n for n in bcmish if n.lower().startswith("bcm")]
+                    candidates = starts or bcmish
+                    ends1 = [n for n in candidates if re.search(r"1$", n)]
+                    candidates = ends1 or candidates
+                    if deployer.non_interactive:
+                        if len(candidates) == 1:
+                            deployer.bcm_node_name = candidates[0]
+                            print(f"\n  [non-interactive] Using BCM node: {deployer.bcm_node_name}")
+                        else:
+                            print("\n✗ Could not uniquely determine BCM node in --sim-id mode.")
+                            print("  Please re-run with --primary <hostname> (or --secondary <hostname>).")
+                            return 2
+                    else:
+                        if len(candidates) == 1:
+                            deployer.bcm_node_name = candidates[0]
+                            print(f"\n  ✓ Selected BCM node: {deployer.bcm_node_name}")
+                        elif len(candidates) > 1:
+                            print("\nMultiple BCM-like nodes found:")
+                            for i, n in enumerate(candidates, start=1):
+                                print(f"  {i}) {n}")
+                            choice = input("Select BCM node by number: ").strip()
+                            try:
+                                idx = int(choice)
+                                deployer.bcm_node_name = candidates[idx - 1]
+                            except Exception:
+                                print("✗ Invalid selection; re-run with --primary <hostname>")
+                                return 2
+                        else:
+                            deployer.bcm_node_name = input("Enter BCM node hostname: ").strip()
+                            if not deployer.bcm_node_name:
+                                print("✗ No hostname provided.")
+                                return 2
+
+                deployer.bcm_outbound_interface = "eth0"
+
+                # Ensure SSH service exists or create it
+                deployer.enable_ssh_service()
+                ssh_info = deployer.get_ssh_service_info(interface="eth0")
+                if not ssh_info:
+                    print("\n✗ Error: SSH service not available for this simulation/node.")
+                    return 2
+                ssh_config_path = deployer.create_ssh_config(ssh_info, simulation_name=f"sim-{args.sim_id[:8]}")
+                if not ssh_config_path:
+                    print("\n✗ Error: Could not create SSH config for post-install-only mode.")
+                    return 2
+                ssh_config_file = str(ssh_config_path)
+
+                # Persist minimal progress for convenience
+                progress.set(
+                    simulation_id=deployer.simulation_id,
+                    bcm_node_name=deployer.bcm_node_name,
+                    ssh_config_file=ssh_config_file,
+                    topology_dir=str(feature_topology_dir),
+                    bcm_version=bcm_version,
+                )
+
+            if not saved_topology_dir:
+                saved_topology_dir = progress.get('topology_dir')
+            if not ssh_config_file:
+                ssh_config_file = progress.get('ssh_config_file')
+            if not bcm_version:
+                bcm_version = progress.get('bcm_version')
+
             if not saved_topology_dir or not ssh_config_file or not bcm_version:
-                print("\n✗ --post-install-only requires existing progress with topology_dir, ssh_config_file, and bcm_version.")
-                print("  Tip: run a normal deployment once (or use --resume) so progress.json is populated.")
+                print("\n✗ --post-install-only requires either:")
+                print("  - existing progress with topology_dir + ssh_config_file + bcm_version, OR")
+                print("  - --sim-id plus --bcm-version and a valid --topology directory.")
                 return 2
+
             feature_topology_dir = Path(saved_topology_dir)
             print("\n" + "="*60)
             print("Post-Install Only Mode")
