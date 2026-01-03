@@ -2976,7 +2976,7 @@ Host bcm
                     "while IFS= read -r line || [ -n \"$line\" ]; do "
                     "  s=\"$(echo \"$line\" | sed -e \"s/^[[:space:]]*//\")\"; "
                     "  if [[ -z \"$s\" ]] || [[ \"$s\" == \\#* ]]; then continue; fi; "
-                    "  if [[ \"$s\" == cmsh\\ * ]]; then s=\"$CMSH_BIN ${s#cmsh }\"; fi; "
+                    "  if [[ \"$s\" == cmsh\\ * ]]; then s=\"sudo -H $CMSH_BIN ${s#cmsh }\"; fi; "
                     "  echo \"[cmsh] $s\"; "
                     "  eval \"$s\"; "
                     "done < \"$f\"'"
@@ -3239,6 +3239,16 @@ Examples:
         help='Resume from last checkpoint (uses .logs/progress.json)'
     )
     parser.add_argument(
+        '--post-install-only',
+        action='store_true',
+        help='Run only the post-install features/actions from features.yaml (requires existing progress.json with ssh_configured and topology_dir).'
+    )
+    parser.add_argument(
+        '--reset-post-install',
+        action='store_true',
+        help='Reset post-install action index so actions run again from the beginning (use with --post-install-only or --resume).'
+    )
+    parser.add_argument(
         '--clear-progress',
         action='store_true',
         help='Clear saved progress and start fresh'
@@ -3290,6 +3300,11 @@ Examples:
             
             if not progress.get_last_step():
                 print("\n  Starting fresh (no previous progress)")
+
+        # Optional: reset post-install action runner index (useful for iterating on cmsh scripts)
+        if args.reset_post_install:
+            progress.set(post_install_action_index=0)
+            print("\n✓ Post-install action index reset (post_install_action_index=0)")
         
         # Initialize deployer
         print("\n" + "="*60)
@@ -3326,6 +3341,27 @@ Examples:
         simulation_name = None
         cloudinit_success = False
         ssh_config_file = None
+
+        # Fast path: run post-install only (no sim creation, no iso upload, no ansible)
+        if args.post_install_only:
+            saved_topology_dir = progress.get('topology_dir')
+            ssh_config_file = progress.get('ssh_config_file')
+            bcm_version = progress.get('bcm_version')
+            if not saved_topology_dir or not ssh_config_file or not bcm_version:
+                print("\n✗ --post-install-only requires existing progress with topology_dir, ssh_config_file, and bcm_version.")
+                print("  Tip: run a normal deployment once (or use --resume) so progress.json is populated.")
+                return 2
+            feature_topology_dir = Path(saved_topology_dir)
+            print("\n" + "="*60)
+            print("Post-Install Only Mode")
+            print("="*60)
+            ok = deployer.run_post_install_features(feature_topology_dir, ssh_config_file, bcm_version=bcm_version)
+            if ok:
+                progress.complete_step('features_configured')
+                print("\n✓ Post-install completed")
+                return 0
+            print("\n✗ Post-install had errors")
+            return 1
         
         # Step: BCM version selection
         if args.resume and progress.is_step_completed('bcm_version_selected'):
