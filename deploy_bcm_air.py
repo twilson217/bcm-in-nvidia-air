@@ -2270,13 +2270,14 @@ expect {{
             config_file = project_ssh_dir / sim_name_slug
         
         # Create config content - direct connection to BCM head node
+        pw_hint = getattr(self, "default_password", None) or "Nvidia1234!"
         config_content = f"""# NVIDIA Air Simulation SSH Configuration
 # Simulation: {simulation_name}
 # Simulation ID: {self.simulation_id}
 # Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}
 #
 # SSH service is configured directly on the BCM head node.
-# Password configured via cloud-init: {self.default_password}
+# Password configured via cloud-init (or SSH bootstrap): {pw_hint}
 
 Host air-{self.bcm_node_name}
   HostName {ssh_info['hostname']}
@@ -2311,7 +2312,7 @@ Host bcm
         print(f"    Host: {ssh_info['hostname']}")
         print(f"    Port: {ssh_info['port']}")
         print(f"    User: root")
-        print(f"    Password: {self.default_password}")
+        print(f"    Password: {pw_hint}")
         
         return config_file
     
@@ -3174,6 +3175,15 @@ Examples:
   
   # Deploy and let it auto-generate name (202512001-BCM-Lab, 202512002-BCM-Lab, etc.)
   python deploy_bcm_air.py
+
+  # Run post install actions on an already running sim (no progress.json required)
+  python deploy_bcm_air.py \\
+    --post-install-only \\
+    --sim-id 46d60a17-4ccb-4781-96d8-9c3338d95b11 \\
+    --topology topologies/preconfigured \\
+    --bcm-version 10.30.0 \\
+    --primary bcm-01 \\
+    --default-password Nvidia1234!
         """
     )
     
@@ -3222,6 +3232,11 @@ Examples:
     parser.add_argument(
         '--bcm-version',
         help='BCM version to install. Can be major version (10, 11) or specific release (10.30.0, 11.30.0). If multiple ISOs exist for a major version, specific release is required in non-interactive mode.'
+    )
+    parser.add_argument(
+        '--default-password',
+        dest='default_password',
+        help='Default node password used by this tool (for cloud-init/SSH bootstrap and for printing connection hints). Default: Nvidia1234!'
     )
     parser.add_argument(
         '--non-interactive', '-y',
@@ -3348,6 +3363,13 @@ Examples:
             saved_topology_dir = progress.get('topology_dir')
             ssh_config_file = progress.get('ssh_config_file')
             bcm_version = progress.get('bcm_version')
+            # Ensure a default password is always available for SSH config/comments.
+            deployer.default_password = (
+                args.default_password
+                or progress.get("default_password")
+                or getattr(deployer, "default_password", None)
+                or "Nvidia1234!"
+            )
 
             # Option B: re-derive connection info from --sim-id (useful if progress.json was cleared)
             if args.sim_id:
