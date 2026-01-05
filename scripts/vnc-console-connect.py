@@ -103,15 +103,39 @@ def get_simulation_nodes(api_url: str, jwt: str, sim_id: str) -> List[dict]:
 
 def get_simulation_services(api_url: str, jwt: str, sim_id: str) -> List[dict]:
     """Get services for a simulation."""
-    url = f"{api_url.rstrip('/')}/api/v2/simulations/services/?simulation={sim_id}"
-    resp = requests.get(
-        url,
-        headers={"Authorization": f"Bearer {jwt}"},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("results", data) if isinstance(data, dict) else data
+    # NOTE: On Air, services are listed under the interface services endpoint (OpenAPI):
+    #   GET /api/v2/simulations/nodes/interfaces/services/?simulation=<uuid>
+    #
+    # Older/alternate deployments may have used:
+    #   GET /api/v2/simulations/services/?simulation=<uuid>
+    #
+    # We try the OpenAPI endpoint first, then fall back for compatibility.
+    base = api_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {jwt}"}
+
+    urls = [
+        f"{base}/api/v2/simulations/nodes/interfaces/services/?simulation={sim_id}",
+        f"{base}/api/v2/simulations/services/?simulation={sim_id}",
+    ]
+
+    last_exc: Optional[Exception] = None
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=30)
+            # Some deployments return 404 for unsupported endpoints.
+            if resp.status_code == 404:
+                last_exc = requests.exceptions.HTTPError(f"404 Not Found: {url}", response=resp)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("results", data) if isinstance(data, dict) else data
+        except Exception as e:
+            last_exc = e
+            continue
+
+    if last_exc:
+        raise last_exc
+    return []
 
 
 def parse_console_url(console_url: str) -> Tuple[str, str, int]:
@@ -281,18 +305,27 @@ def find_ssh_service_port(api_url: str, jwt: str, sim_id: str, worker_hostname: 
     services = get_simulation_services(api_url, jwt, sim_id)
     
     for svc in services:
-        # Look for SSH services (typically name contains 'ssh' or service is on port 22)
-        svc_name = svc.get("name", "").lower()
-        interface = svc.get("interface", {})
-        
-        # Check if this is an SSH service
-        if "ssh" in svc_name or svc.get("src_port") == 22:
-            dest_host = svc.get("dest_host", "")
-            dest_port = svc.get("dest_port")
-            
-            # Check if the dest_host matches our worker hostname
-            if dest_host == worker_hostname and dest_port:
-                return str(dest_port)
+        # v2 Service objects typically have: name, service_type, src_port, dest_port, host
+        # Some older objects used: dest_host, dest_port
+        svc_name = str(svc.get("name", "")).lower()
+        svc_type = str(svc.get("service_type", "")).lower()
+
+        # Determine "host" field where the service is reachable (usually workerXX...).
+        svc_host = svc.get("host") or svc.get("dest_host") or ""
+        svc_host = str(svc_host)
+
+        # Determine external port (dest_port in v2).
+        dest_port = svc.get("dest_port") or svc.get("port")
+
+        # Determine internal/source port (22 for SSH).
+        src_port = svc.get("src_port")
+
+        is_ssh = ("ssh" in svc_name) or (svc_type == "ssh") or (src_port == 22)
+        if not is_ssh:
+            continue
+
+        if svc_host == worker_hostname and dest_port:
+            return str(dest_port)
     
     return None
 
