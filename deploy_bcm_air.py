@@ -3052,17 +3052,52 @@ Host bcm
             return False
 
         # Prefer *API-derived* identification rather than local directory names.
-        # We treat a node as "switch-like" if its console username is NOT ubuntu/root.
-        # (Ubuntu nodes like bcm/cpu typically use console_username=ubuntu; network OSes like
-        # Cumulus commonly present console_username=cumulus/admin.)
-        def _is_switch_like(node: dict) -> bool:
-            cu = str(node.get("console_username") or "").strip().lower()
-            if not cu:
-                return False
-            if cu in ("ubuntu", "root"):
-                return False
-            return True
+        #
+        # Hard requirements:
+        #  - Never reset BCM nodes (at minimum bcm-01/bcm-02; more generally anything starting with "bcm")
+        #
+        # Switch identification (best-effort, robust across API variants):
+        #  - If node exposes OS name/slug fields, match for known network OS markers (e.g. "cumulus")
+        #  - Otherwise, use console_username markers (e.g. "cumulus", "admin")
+        #
+        # We intentionally avoid relying on switch-config directory names (can include non-node folders like "template").
+        os_markers = ("cumulus", "sonic", "nxos", "eos", "junos", "onyx")
 
+        def _node_name(node: dict) -> str:
+            return str(node.get("name") or "").strip()
+
+        def _is_excluded(node: dict) -> bool:
+            nm = _node_name(node).lower()
+            # Minimum safety: never reset BCM nodes.
+            return nm.startswith("bcm")
+
+        def _os_text(node: dict) -> str:
+            # Some deployments may include richer OS info in additional fields;
+            # fall back to whatever string fields exist.
+            parts: list[str] = []
+            for k in ("os_name", "os_slug", "os_display_name", "os", "metadata", "features"):
+                v = node.get(k)
+                if isinstance(v, str) and v.strip():
+                    parts.append(v.strip())
+            return " ".join(parts).lower()
+
+        def _is_switch_like(node: dict) -> bool:
+            if _is_excluded(node):
+                return False
+            ot = _os_text(node)
+            if ot and any(m in ot for m in os_markers):
+                return True
+
+            cu = str(node.get("console_username") or "").strip().lower()
+            # Console username is often populated for network OSes.
+            if cu in ("cumulus", "admin"):
+                return True
+            # Unknown / unhelpful values shouldn't cause us to reset everything.
+            if cu in ("", "ubuntu", "root", "unconnected"):
+                return False
+            return False
+
+        excluded_names: list[str] = []
         switch_nodes: list[tuple[str, str]] = []
         for n in sim_nodes:
             try:
@@ -3070,14 +3105,20 @@ Host bcm
                 nm = str(n.get("name") or "")
                 if not nid or not nm:
                     continue
+                if _is_excluded(n):
+                    excluded_names.append(nm)
+                    continue
                 if _is_switch_like(n):
                     switch_nodes.append((nm, str(nid)))
             except Exception:
                 continue
 
+        if excluded_names:
+            print(f"    (excluded from reset): {', '.join(sorted(set(excluded_names)))}")
+
         if not switch_nodes:
-            print("    ⚠ No switch-like nodes detected from API (by console_username). Skipping switch reset.")
-            print("      If you expect switches here, check whether their console_username is populated in the nodes API.")
+            print("    ⚠ No switch-like nodes detected from API (by OS/console heuristics). Skipping switch reset.")
+            print("      If you expect switches here, check whether the nodes API exposes an OS name/slug (e.g. contains 'cumulus') or console_username='cumulus'.")
             return True  # nothing to do, don't fail post-install
 
         print(f"    Switch nodes to reset ({len(switch_nodes)}): {', '.join([n for n, _ in switch_nodes])}")
