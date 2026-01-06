@@ -3045,41 +3045,46 @@ Host bcm
             print("    ✗ Cannot reset switches: simulation_id is not set")
             return False
 
-        switch_names = self._detect_switch_node_names(topology_dir=topology_dir, switch_configs_dir=switch_configs_dir)
-        if not switch_names:
-            print("    ⚠ No switch nodes detected (no switch configs dir entries and no switch OS nodes found in topology.json)")
-            return True  # Nothing to do
-
-        print(f"    Switch nodes to reset ({len(switch_names)}): {', '.join(switch_names)}")
-
         try:
             sim_nodes = self._list_simulation_nodes_v2()
         except Exception as e:
             print(f"    ✗ Could not list simulation nodes for reset: {e}")
             return False
 
-        name_to_id: dict[str, str] = {}
+        # Prefer *API-derived* identification rather than local directory names.
+        # We treat a node as "switch-like" if its console username is NOT ubuntu/root.
+        # (Ubuntu nodes like bcm/cpu typically use console_username=ubuntu; network OSes like
+        # Cumulus commonly present console_username=cumulus/admin.)
+        def _is_switch_like(node: dict) -> bool:
+            cu = str(node.get("console_username") or "").strip().lower()
+            if not cu:
+                return False
+            if cu in ("ubuntu", "root"):
+                return False
+            return True
+
+        switch_nodes: list[tuple[str, str]] = []
         for n in sim_nodes:
             try:
-                nm = str(n.get("name") or "")
                 nid = n.get("id")
-                if nm and nid:
-                    name_to_id[nm] = str(nid)
+                nm = str(n.get("name") or "")
+                if not nid or not nm:
+                    continue
+                if _is_switch_like(n):
+                    switch_nodes.append((nm, str(nid)))
             except Exception:
                 continue
 
-        missing = [n for n in switch_names if n not in name_to_id]
-        if missing:
-            print(f"    ⚠ Some switch names were not found in the simulation node list: {', '.join(missing)}")
+        if not switch_nodes:
+            print("    ⚠ No switch-like nodes detected from API (by console_username). Skipping switch reset.")
+            print("      If you expect switches here, check whether their console_username is populated in the nodes API.")
+            return True  # nothing to do, don't fail post-install
 
-        target_ids = [(n, name_to_id[n]) for n in switch_names if n in name_to_id]
-        if not target_ids:
-            print("    ⚠ No matching switch nodes found to reset")
-            return False
+        print(f"    Switch nodes to reset ({len(switch_nodes)}): {', '.join([n for n, _ in switch_nodes])}")
 
         base = self.api_base_url.rstrip("/")
         ok = True
-        for nm, nid in target_ids:
+        for nm, nid in switch_nodes:
             try:
                 print(f"    Resetting {nm} ({nid})...")
                 r = requests.post(

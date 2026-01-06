@@ -1,4 +1,3 @@
-[sudo] password for cumulus: 
 - header:
     model: vx
     nvue-api-version: nvue_v1
@@ -28,6 +27,7 @@
     interface:
       bond1:
         bond:
+          lacp-bypass: on
           member:
             swp31: {}
         bridge:
@@ -49,6 +49,7 @@
         type: bond
       bond2:
         bond:
+          lacp-bypass: on
           member:
             swp32: {}
         bridge:
@@ -68,6 +69,94 @@
               local-id: 32
               mac-address: 02:00:00:00:01:02
         type: bond
+      bond11:
+        bond:
+          lacp-bypass: on
+          member:
+            swp1: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: cpu-01
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 33
+              mac-address: 02:00:00:00:01:11
+        type: bond
+      bond12:
+        bond:
+          lacp-bypass: on
+          member:
+            swp2: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: cpu-02
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 34
+              mac-address: 02:00:00:00:01:12
+        type: bond
+      bond13:
+        bond:
+          lacp-bypass: on
+          member:
+            swp3: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: cpu-03
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 35
+              mac-address: 02:00:00:00:01:13
+        type: bond
+      bond14:
+        bond:
+          lacp-bypass: on
+          member:
+            swp4: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: cpu-04
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 36
+              mac-address: 02:00:00:00:01:14
+        type: bond
       eth0:
         description: mgmt-leaf-02:swp31
         ip:
@@ -79,44 +168,12 @@
             10.1.36.132/32: {}
         type: loopback
       swp1:
-        bridge:
-          domain:
-            br_default:
-              access: 101
-              stp:
-                admin-edge: on
-                auto-edge: on
-                bpdu-guard: on
         type: swp
       swp2:
-        bridge:
-          domain:
-            br_default:
-              access: 101
-              stp:
-                admin-edge: on
-                auto-edge: on
-                bpdu-guard: on
         type: swp
       swp3:
-        bridge:
-          domain:
-            br_default:
-              access: 101
-              stp:
-                admin-edge: on
-                auto-edge: on
-                bpdu-guard: on
         type: swp
       swp4:
-        bridge:
-          domain:
-            br_default:
-              access: 101
-              stp:
-                admin-edge: on
-                auto-edge: on
-                bpdu-guard: on
         type: swp
       swp31:
         type: swp

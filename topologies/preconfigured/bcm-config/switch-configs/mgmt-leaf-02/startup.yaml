@@ -537,7 +537,7 @@
         description: OOB_MGMT_VLAN10
         ip:
           address:
-            10.1.28.1/24: {}
+            10.1.28.14/24: {}
           vrf: OOB
         type: svi
         vlan: 10
@@ -573,6 +573,9 @@
                   ext-community-bw: multipaths
     service:
       dns:
+        OOB:
+          server:
+            10.1.28.254: {}
         mgmt:
           server:
             192.168.200.254: {}
@@ -672,6 +675,12 @@
             autonomous-system: 4200001202
             enable: on
             router-id: 10.1.36.139
+          static:
+            default:
+              address-family: ipv4-unicast
+              via:
+                10.1.28.254:
+                  type: ipv4-address
       default:
         evpn:
           enable: on
