@@ -3123,7 +3123,14 @@ Host bcm
         def _is_excluded(node: dict) -> bool:
             nm = _node_name(node).lower()
             # Minimum safety: never reset BCM nodes.
-            return nm.startswith("bcm")
+            if nm.startswith("bcm"):
+                return True
+            # Also avoid resetting compute nodes (cpu-*) or other infra nodes if present.
+            if nm.startswith("cpu"):
+                return True
+            if nm.startswith("oob") or "mgmt-switch" in nm:
+                return True
+            return False
 
         def _os_text(node: dict) -> str:
             # Some deployments may include richer OS info in additional fields;
@@ -3166,6 +3173,26 @@ Host bcm
                     switch_nodes.append((nm, str(nid)))
             except Exception:
                 continue
+
+        # If we couldn't detect any switches via OS/console markers, fall back to a conservative
+        # name-based heuristic: any node that is NOT excluded (bcm*/cpu*/oob*) is treated as a switch.
+        # This matches common Air lab topologies where switches are the remaining nodes.
+        if not switch_nodes:
+            fallback: list[tuple[str, str]] = []
+            for n in sim_nodes:
+                try:
+                    nid = n.get("id")
+                    nm = str(n.get("name") or "")
+                    if not nid or not nm:
+                        continue
+                    if _is_excluded(n):
+                        continue
+                    fallback.append((nm, str(nid)))
+                except Exception:
+                    continue
+            if fallback:
+                print("    ⚠ Switch OS/console fields are not identifying switches in this simulation; using name-based fallback (non-BCM/non-CPU nodes).")
+                switch_nodes = fallback
 
         if excluded_names:
             print(f"    (excluded from reset): {', '.join(sorted(set(excluded_names)))}")
