@@ -131,6 +131,14 @@ cp ~/Downloads/bcm-10.0-ubuntu2404.iso .iso/
 cp ~/Downloads/bcm-11.0-ubuntu2404.iso .iso/
 ```
 
+**Important (ISO naming + version-specific patches):**
+
+Some ISO downloads are named like `bcm-10.0-ubuntu2404.iso` / `bcm-11.0-ubuntu2404.iso` and do **not** include the exact BCM release number. This repo applies compatibility patches based on the **BCM release** (e.g. `11.31.0`), so:
+
+- Check the current/latest release numbers on the [BCM release notes](https://support.brightcomputing.com/release-notes/)
+- Prefer renaming your ISO to include the full release (example: `bcm-11.31.0-ubuntu2404.iso`)
+- If you keep the `bcm-10.0*` / `bcm-11.0*` naming, `deploy_bcm_air.py` will prompt (interactive mode) for the exact release so it can select patches
+
 **ISO Filename Patterns:**
 
 The script auto-detects ISO files based on filename patterns. Supported formats:

@@ -584,11 +584,61 @@ class AirBCMDeployer:
             if 1 <= choice <= len(all_options):
                 major, iso = all_options[choice - 1]
                 collection = f'brightcomputing.installer{major}0'
-                print(f"\n✓ Selected: BCM {iso['version']}")
-                return iso['version'], collection, iso['file']
+                selected_version = iso['version']
+                # Some downloads are named like bcm-11.0-ubuntu2404.iso or bcm-10.0-ubuntu2404.iso.
+                # Those filenames do not encode the real release (e.g. 11.31.0), but we use the
+                # release string to decide which compatibility patches to apply.
+                selected_version = self._maybe_prompt_exact_bcm_release(major, iso, selected_version)
+                print(f"\n✓ Selected: BCM {selected_version}")
+                return selected_version, collection, iso['file']
             else:
                 print(f"Invalid choice. Enter 1-{len(all_options)}.")
     
+    def _maybe_prompt_exact_bcm_release(self, major: str, iso: dict, selected_version: str) -> str:
+        """
+        If the ISO filename looks like a generic 'bcm-<major>.0*.iso' download (missing exact release),
+        prompt for the exact BCM release string so version-specific patches can be selected.
+        """
+        try:
+            filename = str(iso.get("filename") or iso.get("file") or "").lower()
+        except Exception:
+            filename = ""
+
+        # Heuristic: treat "10.0.0" / "11.0.0" (or filenames containing bcm-10.0 / bcm-11.0)
+        # as ambiguous downloads that need user-provided release number.
+        ambiguous = False
+        try:
+            parts = str(selected_version).split(".")
+            ambiguous = (len(parts) >= 3 and parts[0] == major and parts[1] == "0" and parts[2] == "0")
+        except Exception:
+            ambiguous = False
+        if not ambiguous and filename:
+            if f"bcm-{major}.0" in filename or f"bcm{major}.0" in filename:
+                ambiguous = True
+
+        if not ambiguous:
+            return selected_version
+
+        # Non-interactive mode cannot prompt; proceed but warn loudly (patch selection may be wrong).
+        if getattr(self, "non_interactive", False):
+            print(f"\n  ⚠ Selected ISO '{iso.get('filename', '')}' does not include the exact BCM release number.")
+            print("  ⚠ Version-specific patches are selected by BCM release (e.g. 11.31.0).")
+            print("  ⚠ In non-interactive mode, please re-run with --bcm-version <full-release> or rename the ISO accordingly.")
+            return selected_version
+
+        print(f"\n  ⚠ The selected ISO filename '{iso.get('filename', '')}' looks like a generic download and does not include the exact BCM release.")
+        print("  Version-specific patches are selected by BCM release (e.g. 10.30.0, 10.25.03, 11.31.0, 11.25.05a).")
+        while True:
+            user_ver = input(f"Enter the exact BCM {major}.x release for this ISO (e.g. {major}.30.0): ").strip()
+            if not user_ver:
+                print(f"  ⚠ Keeping inferred version {selected_version}; patches may not be applied correctly.")
+                return selected_version
+            # Accept releases like 10.25.03 or 11.25.05a
+            import re
+            if re.fullmatch(rf"{major}\.\d+\.\d+[a-z]?", user_ver):
+                return user_ver
+            print(f"Invalid release string: '{user_ver}'. Expected format like '{major}.30.0' or '{major}.25.05a'.")
+
     def _resolve_requested_version(self, requested_version, available):
         """
         Resolve a requested version string to a specific ISO.
@@ -622,8 +672,12 @@ class AirBCMDeployer:
         if requested_version in ('10', '11'):
             if len(isos) == 1:
                 iso = isos[0]
-                print(f"\n✓ Using BCM {iso['version']} ({iso['filename']})")
-                return iso['version'], collection, iso['file']
+                selected_version = iso['version']
+                # If the only ISO present is ambiguously named (e.g. bcm-11.0-ubuntu2404.iso),
+                # prompt in interactive mode so we can select version-specific patches.
+                selected_version = self._maybe_prompt_exact_bcm_release(major, iso, selected_version)
+                print(f"\n✓ Using BCM {selected_version} ({iso['filename']})")
+                return selected_version, collection, iso['file']
             else:
                 print(f"\n✗ Multiple BCM {major} ISOs found. Please specify exact version:")
                 for iso in isos:
