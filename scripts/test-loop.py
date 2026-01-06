@@ -15,9 +15,10 @@ import re
 import sys
 import time
 import subprocess
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
@@ -43,6 +44,7 @@ class TestCase:
     api_url: str
     env_file: Path
     bcm_version: str
+    topology: str
 
 
 def _now() -> str:
@@ -240,6 +242,117 @@ def _download_failure_logs(test_key: str, ssh_config: Optional[str], sim_name: O
         pass  # Best effort
 
 
+def _load_topology_test_module(topology_dir: Path) -> Tuple[Optional[Any], Optional[Path], Optional[str]]:
+    """
+    Load optional per-topology tests from:
+      <topology_dir>/tests/topology-test.py
+
+    Returns: (module, path, error_message)
+    """
+    test_path = topology_dir / "tests" / "topology-test.py"
+    if not test_path.exists():
+        return None, None, None
+
+    try:
+        # Use a unique module name so multiple topologies in one process won't clash.
+        mod_name = f"topology_test_{_safe_slug(str(topology_dir))}"
+        spec = importlib.util.spec_from_file_location(mod_name, test_path)
+        if spec is None or spec.loader is None:
+            return None, test_path, f"Could not load module spec for {test_path}"
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)  # type: ignore[attr-defined]
+        return module, test_path, None
+    except Exception as e:
+        return None, test_path, f"Import error: {e}"
+
+
+def _run_topology_tests(
+    module: Any,
+    *,
+    test_key: str,
+    topology_dir: Path,
+    api_url: str,
+    env_file: Path,
+    bcm_version: str,
+    simulation_id: Optional[str],
+    simulation_name: Optional[str],
+    ssh_config: Optional[str],
+) -> bool:
+    """
+    Execute optional topology-specific tests.
+
+    Contract (intentionally simple):
+      - topology-test.py may define:
+          run_tests(context: dict) -> bool | list[dict] | list[tuple]
+        where each item can be:
+          - dict(name=<str>, ok=<bool>, details=<str optional>)
+          - tuple(name, ok, details?)
+
+    Any False result marks the overall test as failed.
+    """
+    ctx = {
+        "test_key": test_key,
+        "repo_root": str(REPO_ROOT),
+        "topology_dir": str(topology_dir),
+        "api_url": api_url,
+        "env_file": str(env_file),
+        "bcm_version": bcm_version,
+        "simulation_id": simulation_id,
+        "simulation_name": simulation_name,
+        "ssh_config_file": ssh_config,
+        "logs_dir": str(LOG_DIR),
+    }
+
+    fn = getattr(module, "run_tests", None)
+    if not callable(fn):
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} WARNING: topology-test.py present but no run_tests(context) defined")
+        return True
+
+    try:
+        res = fn(ctx)
+    except Exception as e:
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} TOPOLOGY_TESTS_FAIL exception={e}")
+        return False
+
+    # Simple bool return.
+    if isinstance(res, bool):
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} TOPOLOGY_TESTS {'PASS' if res else 'FAIL'}")
+        return res
+
+    # Structured results.
+    ok_all = True
+    if isinstance(res, list):
+        for item in res:
+            name = "unnamed"
+            ok = False
+            details = ""
+            if isinstance(item, dict):
+                name = str(item.get("name") or name)
+                ok = bool(item.get("ok"))
+                details = str(item.get("details") or "")
+            elif isinstance(item, tuple) and len(item) >= 2:
+                name = str(item[0])
+                ok = bool(item[1])
+                if len(item) >= 3:
+                    details = str(item[2] or "")
+            else:
+                name = f"invalid_result:{type(item).__name__}"
+                ok = False
+
+            ok_all = ok_all and ok
+            detail_suffix = f" | {details}" if details else ""
+            _append_line(
+                SUMMARY_LOG,
+                f"[{_now()}] {test_key} TOPOLOGY_TEST {name} {'PASS' if ok else 'FAIL'}{detail_suffix}",
+            )
+    else:
+        _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} WARNING: topology tests returned unsupported type: {type(res).__name__}")
+        return False
+
+    _append_line(SUMMARY_LOG, f"[{_now()}] {test_key} TOPOLOGY_TESTS {'PASS' if ok_all else 'FAIL'}")
+    return ok_all
+
+
 def _air_login_jwt(api_url: str, username: str, api_token: str) -> str:
     login_url = f"{api_url.rstrip('/')}/api/v1/login/"
     resp = requests.post(
@@ -277,6 +390,8 @@ def _run_deploy(test: TestCase, extra_env: Dict[str, str], dry_run: bool) -> Tup
         test.bcm_version,
         "--api-url",
         test.api_url,
+        "--topology",
+        test.topology,
     ]
 
     header = f"[{_now()}] START {test.key}: {test.name} | api={test.api_url} | bcm={test.bcm_version} | env={test.env_file.name}"
@@ -466,6 +581,11 @@ def main() -> int:
         help="Print what would run, but do not execute deployments or delete sims",
     )
     parser.add_argument(
+        "--topology",
+        default="topologies/default",
+        help="Topology directory to test (passed through to deploy_bcm_air.py --topology). Default: topologies/default",
+    )
+    parser.add_argument(
         "--stop-on-fail",
         action="store_true",
         help="Stop the loop immediately if any test fails",
@@ -516,10 +636,11 @@ def main() -> int:
             tests.append(
                 TestCase(
                     key=key,
-                    name=f"BCM {v} on {api_url} ({env_file.name})",
+                    name=f"BCM {v} on {api_url} ({env_file.name}) | topology={args.topology}",
                     api_url=api_url,
                     env_file=env_file,
                     bcm_version=v,
+                    topology=args.topology,
                 )
             )
 
@@ -541,6 +662,12 @@ def main() -> int:
     test_timings: List[Tuple[str, float]] = []  # (test_key, elapsed_seconds)
 
     for test in tests:
+        topology_dir = (REPO_ROOT / test.topology) if not Path(test.topology).is_absolute() else Path(test.topology)
+        topology_module, topology_test_path, topology_test_err = _load_topology_test_module(topology_dir)
+        if topology_test_err:
+            _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} WARNING: failed to load topology tests from {topology_test_path}: {topology_test_err}")
+            topology_module = None
+
         extra_env = _parse_dotenv(test.env_file)
         progress_path = _progress_path_for_env(extra_env)
 
@@ -571,6 +698,26 @@ def main() -> int:
                 SUMMARY_LOG,
                 f"[{_now()}] {test.key} bootstrap_method={bootstrap_method} bootstrap_tool={bootstrap_tool} password_change_prompt={bootstrap_pwchange}",
             )
+
+        # Optional topology-specific tests (run after deploy completes, before cleanup).
+        if not args.dry_run and topology_module:
+            ssh_config = _read_progress_ssh_config(progress_path)
+            topo_ok = _run_topology_tests(
+                topology_module,
+                test_key=test.key,
+                topology_dir=topology_dir,
+                api_url=test.api_url,
+                env_file=test.env_file,
+                bcm_version=test.bcm_version,
+                simulation_id=sim_id,
+                simulation_name=sim_name,
+                ssh_config=ssh_config,
+            )
+            if not topo_ok:
+                ok = False
+                status = f"FAIL(topology-tests)"
+                overall_failures += 1
+                _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} marked failed due to topology tests")
 
         if not args.dry_run:
             # If test failed, download logs BEFORE any cleanup.
