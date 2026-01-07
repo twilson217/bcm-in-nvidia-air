@@ -694,6 +694,39 @@ def main() -> int:
             file_sim_id, file_sim_name = _read_progress_sim_id(progress_path)
             sim_id = sim_id or file_sim_id
             sim_name = sim_name or file_sim_name
+        # Optional topology-specific tests (run after deploy completes, before cleanup).
+        # Important: do NOT mask the real failure reason. If deploy failed (rc!=0), we skip
+        # topology tests unless we have an SSH config and the caller explicitly wants to run checks.
+        if not args.dry_run and topology_module:
+            ssh_config = _read_progress_ssh_config(progress_path)
+            if rc != 0:
+                _append_line(
+                    SUMMARY_LOG,
+                    f"[{_now()}] {test.key} TOPOLOGY_TESTS skipped (deploy failed rc={rc}; ssh_config_file={'present' if ssh_config else 'missing'})",
+                )
+            elif not ssh_config:
+                _append_line(
+                    SUMMARY_LOG,
+                    f"[{_now()}] {test.key} TOPOLOGY_TESTS skipped (no ssh_config_file in {progress_path})",
+                )
+            else:
+                topo_ok = _run_topology_tests(
+                    topology_module,
+                    test_key=test.key,
+                    topology_dir=topology_dir,
+                    api_url=test.api_url,
+                    env_file=test.env_file,
+                    bcm_version=test.bcm_version,
+                    simulation_id=sim_id,
+                    simulation_name=sim_name,
+                    ssh_config=ssh_config,
+                )
+                if not topo_ok:
+                    ok = False
+                    status = "FAIL(topology-tests)"
+                    _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} marked failed due to topology tests")
+
+        # Write summary AFTER topology tests so status reflects the final outcome.
         _append_line(
             SUMMARY_LOG,
             f"[{_now()}] {test.key} {status} | elapsed={_format_elapsed(test_elapsed)} | bcm={test.bcm_version} | sim_name={sim_name or 'n/a'}",
@@ -703,26 +736,6 @@ def main() -> int:
                 SUMMARY_LOG,
                 f"[{_now()}] {test.key} bootstrap_method={bootstrap_method} bootstrap_tool={bootstrap_tool} password_change_prompt={bootstrap_pwchange}",
             )
-
-        # Optional topology-specific tests (run after deploy completes, before cleanup).
-        if not args.dry_run and topology_module:
-            ssh_config = _read_progress_ssh_config(progress_path)
-            topo_ok = _run_topology_tests(
-                topology_module,
-                test_key=test.key,
-                topology_dir=topology_dir,
-                api_url=test.api_url,
-                env_file=test.env_file,
-                bcm_version=test.bcm_version,
-                simulation_id=sim_id,
-                simulation_name=sim_name,
-                ssh_config=ssh_config,
-            )
-            if not topo_ok:
-                ok = False
-                status = f"FAIL(topology-tests)"
-                overall_failures += 1
-                _append_line(SUMMARY_LOG, f"[{_now()}] {test.key} marked failed due to topology tests")
 
         if not args.dry_run:
             # If test failed, download logs BEFORE any cleanup.
