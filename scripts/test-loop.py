@@ -260,6 +260,11 @@ def _load_topology_test_module(topology_dir: Path) -> Tuple[Optional[Any], Optio
         if spec is None or spec.loader is None:
             return None, test_path, f"Could not load module spec for {test_path}"
         module = importlib.util.module_from_spec(spec)
+        # Important: register in sys.modules before exec_module().
+        # Some stdlib helpers (notably dataclasses) look up cls.__module__ in sys.modules
+        # during decoration; if missing, you can get errors like:
+        #   "'NoneType' object has no attribute '__dict__'"
+        sys.modules[mod_name] = module
         spec.loader.exec_module(module)  # type: ignore[attr-defined]
         return module, test_path, None
     except Exception as e:
