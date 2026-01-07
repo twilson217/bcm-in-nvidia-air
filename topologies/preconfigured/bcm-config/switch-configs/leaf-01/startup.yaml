@@ -7,6 +7,7 @@
     bridge:
       domain:
         br_default:
+          mac-address: 02:00:00:00:00:11
           stp:
             priority: 28672
             state:
@@ -42,7 +43,7 @@
         evpn:
           multihoming:
             segment:
-              df-preference: 50000
+              df-preference: 60000
               enable: on
               local-id: 31
               mac-address: 02:00:00:00:01:01
@@ -176,6 +177,9 @@
       swp4:
         type: swp
       swp31:
+        link:
+          state:
+            up: {}
         type: swp
       swp32:
         type: swp
@@ -227,6 +231,8 @@
             enable: on
             state:
               up: {}
+        link:
+          mac-address: 02:00:00:00:00:11
         type: svi
         vlan: 100
       vlan101:
@@ -241,6 +247,8 @@
             enable: on
             state:
               up: {}
+        link:
+          mac-address: 02:00:00:00:00:11
         type: svi
         vlan: 101
     nve:
@@ -354,6 +362,7 @@
       reboot:
         mode: cold
       ssh-server:
+        permit-root-login: prohibit-password
         state: enabled
         strict: disabled
       wjh:

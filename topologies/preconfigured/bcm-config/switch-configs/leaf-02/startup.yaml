@@ -255,7 +255,7 @@
         mode: lossless
     router:
       bgp:
-        autonomous-system: 4200001101
+        autonomous-system: 4200001102
         enable: on
         graceful-restart:
           mode: full
@@ -354,6 +354,7 @@
       reboot:
         mode: cold
       ssh-server:
+        permit-root-login: prohibit-password
         state: enabled
         strict: disabled
       wjh:
@@ -394,7 +395,7 @@
                       OOB: {}
               l2vpn-evpn:
                 enable: on
-            autonomous-system: 4200001101
+            autonomous-system: 4200001102
             enable: on
             route-import:
               from-evpn:
