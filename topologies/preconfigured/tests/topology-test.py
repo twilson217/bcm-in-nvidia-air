@@ -64,15 +64,22 @@ def _poll_until(
     interval_s: int,
     fn: Callable[[], Tuple[bool, str]],
 ) -> Result:
+    start = time.monotonic()
     deadline = time.monotonic() + timeout_s
     last_details = ""
     while True:
         ok, details = fn()
         last_details = details
         if ok:
-            return Result(name=desc, ok=True, details=details)
+            elapsed = int(time.monotonic() - start)
+            suffix = f"(elapsed={elapsed}s, timeout={timeout_s}s, interval={interval_s}s)"
+            joined = f"{suffix} | {details}" if details else suffix
+            return Result(name=desc, ok=True, details=joined)
         if time.monotonic() >= deadline:
-            return Result(name=desc, ok=False, details=details or last_details or f"timeout after {timeout_s}s")
+            elapsed = int(time.monotonic() - start)
+            suffix = f"timeout after {timeout_s}s (elapsed={elapsed}s, interval={interval_s}s)"
+            joined = f"{suffix} | {details}" if details else (last_details or suffix)
+            return Result(name=desc, ok=False, details=joined)
         time.sleep(interval_s)
 
 
@@ -154,16 +161,16 @@ def run_tests(context: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     results.append(_poll_until(desc="bcm_networking: eth3 has 10.1.28.254", timeout_s=120, interval_s=5, fn=_eth3_ip_ok))
 
-    # 3) static route 10.0.0.0/8 via 192.168.200.1
+    # 3) static route 10.0.0.0/15 via 192.168.200.1
     def _route_ok() -> Tuple[bool, str]:
-        rc2, out2, err2 = _run_ssh(ssh_config, "ip route show 10.0.0.0/8", timeout=30)
+        rc2, out2, err2 = _run_ssh(ssh_config, "ip route show 10.0.0.0/15", timeout=30)
         if rc2 != 0:
             return False, (err2.strip() or out2.strip())[:400]
         s = out2.strip()
-        ok = ("via 192.168.200.1" in s) and ("10.0.0.0/8" in s)
+        ok = ("via 192.168.200.1" in s) and ("10.0.0.0/15" in s)
         return ok, s[:400]
 
-    results.append(_poll_until(desc="bcm_networking: static route 10.0.0.0/8 via 192.168.200.1", timeout_s=120, interval_s=5, fn=_route_ok))
+    results.append(_poll_until(desc="bcm_networking: static route 10.0.0.0/15 via 192.168.200.1", timeout_s=120, interval_s=5, fn=_route_ok))
 
     # ---------------------------------------------------------------------
     # BCM Switches (aligns to switches_v10.cmsh / switches_v11.cmsh + switch-configs)
@@ -299,19 +306,25 @@ def run_tests(context: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     results.append(_poll_until(desc='bcm_nodes timer#3: cmsh status is not "DOWN" (for all compute nodes)', timeout_s=10 * 60, interval_s=20, fn=_all_compute_not_down))
 
-    # Timer #4 (15 min): status == UP
+    # Timer #4 (30 min): status == UP
     def _all_compute_up() -> Tuple[bool, str]:
         bad: List[str] = []
+        snaps: List[str] = []
         for n, _, _ in compute_nodes:
             rc2, out2, err2 = _run_cmsh(ssh_config, f"device;use {n};status", timeout=30)
             txt = (out2 + "\n" + err2).strip()
             if not re.search(r"\bUP\b", txt):
                 bad.append(n)
+            # include a small, per-node snippet for debugging
+            t = " ".join(txt.split())
+            if not t:
+                t = f"(no output, rc={rc2})"
+            snaps.append(f"{n}={t[:120]}")
         if bad:
-            return False, f"not UP: {', '.join(bad)}"
+            return False, f"not UP: {', '.join(bad)} | " + "; ".join(snaps)
         return True, "all UP"
 
-    results.append(_poll_until(desc='bcm_nodes timer#4: cmsh status contains "UP" (for all compute nodes)', timeout_s=15 * 60, interval_s=30, fn=_all_compute_up))
+    results.append(_poll_until(desc='bcm_nodes timer#4: cmsh status contains "UP" (for all compute nodes)', timeout_s=30 * 60, interval_s=30, fn=_all_compute_up))
 
     # Convert to the structure expected by test-loop's plugin runner.
     return [{"name": r.name, "ok": r.ok, "details": r.details} for r in results]

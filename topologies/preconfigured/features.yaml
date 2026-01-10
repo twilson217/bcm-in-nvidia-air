@@ -8,11 +8,6 @@ bcm_networking:
   config_file: bcm-config/networking.cmsh
   reboot_after: true
 
-# BCM Nodes - Add compute nodes to BCM inventory
-bcm_nodes:
-  enabled: true
-  config_file: bcm-config/nodes.cmsh
-
 # BCM Switches - Add switches to BCM and configure ZTP
 bcm_switches:
   enabled: true
@@ -21,7 +16,38 @@ bcm_switches:
     # "11": bcm-config/switches_v11.cmsh   # Not yet supported by the deployment script.
   # switch_configs: Optional directory containing per-switch configuration files
   switch_configs_dir: bcm-config/switch-configs/
-  reboot_switches_after: true
+  # Preferred: explicit list of switch node names to reset (power-cycle) after ZTP is configured.
+  # (Avoids unreliable auto-detection.)
+  reboot_switches_after:
+    - leaf-01
+    - leaf-02
+    - mgmt-leaf-01
+    - mgmt-leaf-02
+    - spine-01
+    - spine-02
+
+# BCM Nodes - Add compute nodes to BCM inventory
+bcm_nodes:
+  enabled: true
+  config_file: bcm-config/nodes.cmsh
+  # Dependency gate: only reset compute nodes after all management switches are UP in BCM.
+  # (This prevents PXE/DHCP/boot flakiness when the fabric isn't ready yet.)
+  wait_for_switches_up:
+    - leaf-01
+    - leaf-02
+    - mgmt-leaf-01
+    - mgmt-leaf-02
+    - spine-01
+    - spine-02
+  wait_for_switches_timeout: 1800
+  wait_for_switches_interval: 20
+  # Preferred: explicit list of compute node names to reset after the above gate passes.
+  reset_nodes_after:
+    - cpu-01
+    - cpu-02
+    - cpu-03
+    - cpu-04
+  installer_failed_monitoring: true
 
 # Workload Manager - Configure Slurm or Kubernetes
 # Note: This is just a placeholder for future use.

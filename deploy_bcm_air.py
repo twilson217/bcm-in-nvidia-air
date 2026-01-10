@@ -2886,11 +2886,21 @@ Host bcm
         if isinstance(explicit_actions, list):
             actions = explicit_actions
         else:
+            # Carry context across implicit feature expansion (YAML order)
+            # so later steps can depend on earlier ones without requiring an explicit actions: list.
+            bcm_switches_cfg_dir: str | None = None
+            bcm_switches_wait_names: list[str] = []
+
             for feature_name, config in enabled_features:
                 config_file = self._resolve_versioned_value(config.get("config_file"), bcm_major)
                 if feature_name == "bcm_switches":
                     # Copy per-switch startup.yaml directories before adding switches via cmsh.
                     switch_configs_dir = self._resolve_versioned_value(config.get("switch_configs_dir"), bcm_major)
+                    bcm_switches_cfg_dir = str(switch_configs_dir) if switch_configs_dir else None
+                    # Default wait set: detected switch node names (excluding common non-switch folders).
+                    if bcm_switches_cfg_dir:
+                        detected = self._detect_switch_node_names(topology_dir=topology_dir, switch_configs_dir=bcm_switches_cfg_dir)
+                        bcm_switches_wait_names = [n for n in detected if str(n).lower() not in ("bootstrap", "template")]
                     if switch_configs_dir:
                         actions.append(
                             {
@@ -2905,16 +2915,88 @@ Host bcm
                         actions.insert(len(actions) - 1, {"type": "upload_ztp", "name": feature_name, "path": str(ztp_script)})
                 if config_file:
                     actions.append({"type": "cmsh", "name": feature_name, "script": str(config_file)})
-                if feature_name == "bcm_switches" and config.get("reboot_switches_after", False):
-                    # Reset (power-cycle) switches via the Air API so they make a fresh attempt at ZTP.
-                    # We treat "switches" as:
-                    #  - explicit subdirectories under switch_configs_dir (preferred), else
-                    #  - nodes in topology.json whose OS looks like a network OS (cumulus/sonic/nxos/etc)
+                if feature_name == "bcm_switches":
+                    reset_switches = config.get("reboot_switches_after", False)
+                    # Preferred: explicit list of switch node names to reset.
+                    # Back-compat: boolean True triggers best-effort detection.
+                    if isinstance(reset_switches, list):
+                        reset_switches = [str(x).strip() for x in reset_switches if str(x).strip()]
+                        if reset_switches:
+                            actions.append(
+                                {
+                                    "type": "reset_switches",
+                                    "name": feature_name,
+                                    "switches": reset_switches,
+                                }
+                            )
+                    elif reset_switches:
+                        # Reset (power-cycle) switches via the Air API so they make a fresh attempt at ZTP.
+                        # We treat "switches" as:
+                        #  - explicit subdirectories under switch_configs_dir (preferred), else
+                        #  - nodes in topology.json whose OS looks like a network OS (cumulus/sonic/nxos/etc)
+                        actions.append(
+                            {
+                                "type": "reset_switches",
+                                "name": feature_name,
+                                "switch_configs_dir": str(switch_configs_dir) if switch_configs_dir else "",
+                            }
+                        )
+                if feature_name == "bcm_nodes" and config.get("reset_nodes_after", False):
+                    # Dependency gate: ensure switches are UP before we reset compute nodes (so they can PXE/boot).
+                    #
+                    # Recommended config:
+                    #   bcm_nodes:
+                    #     reset_nodes_after: true
+                    #     wait_for_switches_up: [leaf-01, ...]
+                    #     wait_for_switches_timeout: 1800
+                    #     reset_node_prefixes: ["cpu"]
+                    wait_names = config.get("wait_for_switches_up")
+                    if isinstance(wait_names, list):
+                        wait_names = [str(x).strip() for x in wait_names if str(x).strip()]
+                    else:
+                        wait_names = list(bcm_switches_wait_names)
+
+                    wait_timeout = int(config.get("wait_for_switches_timeout", 1800) or 1800)
+                    wait_interval = int(config.get("wait_for_switches_interval", 20) or 20)
+
+                    if wait_names:
+                        actions.append(
+                            {
+                                "type": "wait_for_switches_up",
+                                "name": "wait-switches-up",
+                                "switches": wait_names,
+                                "timeout": wait_timeout,
+                                "interval": wait_interval,
+                            }
+                        )
+
+                    # Preferred: explicit list of node names to reset.
+                    # Back-compat: reset_node_prefixes/reset_node_names are still supported.
+                    prefixes = config.get("reset_node_prefixes")
+                    if isinstance(prefixes, list):
+                        prefixes = [str(x).strip() for x in prefixes if str(x).strip()]
+                    else:
+                        prefixes = ["cpu"]
+
+                    explicit_nodes = config.get("reset_node_names")
+                    if isinstance(explicit_nodes, list):
+                        explicit_nodes = [str(x).strip() for x in explicit_nodes if str(x).strip()]
+                    else:
+                        explicit_nodes = []
+
+                    if isinstance(config.get("reset_nodes_after"), list):
+                        explicit_nodes = [str(x).strip() for x in config.get("reset_nodes_after") if str(x).strip()]
+                        prefixes = []
+
                     actions.append(
                         {
-                            "type": "reset_switches",
-                            "name": feature_name,
-                            "switch_configs_dir": str(switch_configs_dir) if switch_configs_dir else "",
+                            "type": "reset_nodes",
+                            "name": "reset-compute-nodes",
+                            "prefixes": prefixes,
+                            "nodes": explicit_nodes,
+                            "installer_failed_monitoring": bool(config.get("installer_failed_monitoring", False)),
+                            "installer_failed_timeout": int(config.get("installer_failed_timeout", 900) or 900),
+                            "installer_failed_interval": int(config.get("installer_failed_interval", 20) or 20),
                         }
                     )
                 if config.get("reboot_after", False):
@@ -2999,12 +3081,69 @@ Host bcm
                 if not ok:
                     break
             elif act_type == "reset_switches":
-                # Reset all switch nodes via Air API to force a fresh ZTP attempt.
-                switch_cfg_dir = (act.get("switch_configs_dir") or "").strip()
-                ok = self._reset_switch_nodes_via_air(topology_dir=topology_dir, switch_configs_dir=switch_cfg_dir)
+                # Reset switch nodes via Air API to force a fresh ZTP attempt.
+                # Preferred: explicit list of switch node names.
+                # Back-compat: infer switches via API heuristics/topology config dir.
+                switches = act.get("switches") or []
+                if isinstance(switches, list):
+                    switches = [str(x).strip() for x in switches if str(x).strip()]
+                else:
+                    switches = []
+                if switches:
+                    ok = self._reset_nodes_via_air(include_names=switches)
+                else:
+                    switch_cfg_dir = (act.get("switch_configs_dir") or "").strip()
+                    ok = self._reset_switch_nodes_via_air(topology_dir=topology_dir, switch_configs_dir=switch_cfg_dir)
                 success = ok and success
                 if not ok:
                     break
+            elif act_type == "wait_for_switches_up":
+                switches = act.get("switches") or []
+                if not isinstance(switches, list):
+                    switches = []
+                switches = [str(x).strip() for x in switches if str(x).strip()]
+                timeout = int(act.get("timeout", 1800) or 1800)
+                interval = int(act.get("interval", 20) or 20)
+                if not switches:
+                    print("    ⚠ No switches specified for wait_for_switches_up (skipping)")
+                else:
+                    ok = self._wait_for_switches_up(ssh_config_file, switches, timeout=timeout, interval=interval)
+                    success = ok and success
+                    if not ok:
+                        break
+            elif act_type == "reset_nodes":
+                prefixes = act.get("prefixes") or []
+                nodes = act.get("nodes") or []
+                if not isinstance(prefixes, list):
+                    prefixes = []
+                if not isinstance(nodes, list):
+                    nodes = []
+                prefixes = [str(x).strip() for x in prefixes if str(x).strip()]
+                nodes = [str(x).strip() for x in nodes if str(x).strip()]
+                # First reset
+                ok, reset_names = self._reset_nodes_via_air(include_prefixes=prefixes, include_names=nodes)
+                success = ok and success
+                if not ok:
+                    break
+                # Optional: some Air labs report INSTALLER_FAILED after the first reset; reset again once observed.
+                if act.get("installer_failed_monitoring", False) and reset_names:
+                    timeout = int(act.get("installer_failed_timeout", 900) or 900)
+                    interval = int(act.get("installer_failed_interval", 20) or 20)
+                    ok = self._wait_for_nodes_status(
+                        ssh_config_file=ssh_config_file,
+                        node_names=reset_names,
+                        want_status="INSTALLER_FAILED",
+                        timeout=timeout,
+                        interval=interval,
+                    )
+                    success = ok and success
+                    if not ok:
+                        break
+                    # Second reset (explicit list)
+                    ok2, _ = self._reset_nodes_via_air(include_names=reset_names)
+                    success = ok2 and success
+                    if not ok2:
+                        break
             elif act_type == "wlm_setup":
                 # Optional explicit action type (kept for future expansions)
                 cfg = self._resolve_versioned_value(act.get("config"), bcm_major)
@@ -3029,6 +3168,245 @@ Host bcm
             print("\n  ⚠ Some features had errors (see above)")
         
         return success
+
+    def _cmsh_device_list(self, ssh_config_file: str) -> dict[str, str]:
+        """
+        Return a mapping of device hostname -> status (the bracketed status field) from:
+          cmsh -c "device list"
+        """
+        cmd = [
+            "ssh",
+            "-F",
+            ssh_config_file,
+            f"air-{self.bcm_node_name}",
+            f"sudo -H {self.CMSH_BIN} -c \"device list\"",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        out = r.stdout or ""
+        # Parse table rows, extracting hostname and bracket status.
+        # Example:
+        #   Switch                 leaf-01 ... [   UP   ]
+        #   PhysicalNode           cpu-01  ... [  DOWN  ]
+        statuses: dict[str, str] = {}
+        for line in out.splitlines():
+            s = line.rstrip("\n")
+            if not s.strip():
+                continue
+            if s.startswith("Type") or s.startswith("---"):
+                continue
+            m = re.search(r"\[\s*([^\]]+?)\s*\]", s)
+            if not m:
+                continue
+            status = m.group(1).strip()
+            parts = s.split()
+            # Expect: <Type> <Hostname> ...
+            if len(parts) < 2:
+                continue
+            hostname = parts[1].strip()
+            if hostname:
+                statuses[hostname.lower()] = status
+        return statuses
+
+    def _wait_for_nodes_status(
+        self,
+        ssh_config_file: str,
+        node_names: list[str],
+        want_status: str,
+        timeout: int = 900,
+        interval: int = 20,
+    ) -> bool:
+        """
+        Poll `cmsh -c "device list"` until all specified nodes have the given status.
+        """
+        want = [str(n).strip() for n in (node_names or []) if str(n).strip()]
+        want_lower = {n.lower() for n in want}
+        if not want_lower:
+            return True
+        want_status = (want_status or "").strip()
+        if not want_status:
+            return True
+
+        print(f"    Waiting for nodes status {want_status}: {', '.join(want)} (timeout={timeout}s, interval={interval}s)")
+        start = time.time()
+        last_msg = 0.0
+
+        while time.time() - start < timeout:
+            try:
+                statuses = self._cmsh_device_list(ssh_config_file=ssh_config_file)
+                missing: list[str] = []
+                for nm in want_lower:
+                    st = statuses.get(nm)
+                    if st != want_status:
+                        missing.append(nm)
+                if not missing:
+                    print(f"    ✓ All specified nodes reached status {want_status}")
+                    return True
+                if time.time() - last_msg > 30:
+                    # Include a short per-node status snapshot when possible
+                    snapshot = ", ".join([f"{n}={statuses.get(n,'?')}" for n in sorted(want_lower)])
+                    print(f"    (still waiting; not {want_status}: {', '.join(sorted(missing))})")
+                    print(f"    (status snapshot: {snapshot})")
+                    last_msg = time.time()
+            except Exception:
+                pass
+            time.sleep(max(1, interval))
+
+        print(f"    ✗ Timed out waiting for nodes to reach status {want_status} (timeout={timeout}s)")
+        return False
+
+    def _wait_for_switches_up(self, ssh_config_file: str, switch_names: list[str], timeout: int = 1800, interval: int = 20) -> bool:
+        """
+        Poll BCM (via cmsh) until all specified switch devices report status UP.
+
+        We intentionally use the full CMSH_BIN path and sudo -H to ensure BCM certs/env are present.
+        """
+        wanted = [str(s).strip() for s in (switch_names or []) if str(s).strip()]
+        wanted_lower = {s.lower() for s in wanted}
+        if not wanted_lower:
+            return True
+
+        print(f"    Waiting for switches UP: {', '.join(wanted)} (timeout={timeout}s, interval={interval}s)")
+        start = time.time()
+        last_status_msg = 0.0
+        last_err_msg = 0.0
+        last_missing: set[str] | None = None
+
+        while time.time() - start < timeout:
+            try:
+                # Avoid cmsh's --status filtering (can return "No matching devices" even when switches are UP).
+                cmd = [
+                    "ssh",
+                    "-F",
+                    ssh_config_file,
+                    f"air-{self.bcm_node_name}",
+                    f"sudo -H {self.CMSH_BIN} -c \"device;list -t switch\"",
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+                # Parse cmsh table rows and compute which of our wanted switches are currently UP.
+                statuses: dict[str, str] = {}
+                for line in (r.stdout or "").splitlines():
+                    s = line.rstrip("\n")
+                    if not s.strip():
+                        continue
+                    if s.startswith("Type") or s.startswith("---"):
+                        continue
+                    if not s.strip().startswith("Switch"):
+                        continue
+                    m = re.search(r"\[\s*([^\]]+?)\s*\]", s)
+                    if not m:
+                        continue
+                    st = m.group(1).strip()
+                    parts = s.split()
+                    if len(parts) < 2:
+                        continue
+                    host = parts[1].strip().lower()
+                    if host:
+                        statuses[host] = st
+
+                up_now = {h for h, st in statuses.items() if st == "UP"}
+
+                missing_set = set(wanted_lower - up_now)
+                if not missing_set:
+                    print("    ✓ All specified switches are UP")
+                    return True
+
+                # Print whenever the missing set changes, otherwise at a low cadence.
+                if last_missing is None or missing_set != last_missing or (time.time() - last_status_msg) > 30:
+                    missing = ", ".join(sorted(missing_set))
+                    print(f"    (still waiting; missing: {missing})")
+                    last_status_msg = time.time()
+                    last_missing = set(missing_set)
+
+                # If cmsh itself is failing, surface a hint periodically (don’t go silent).
+                if r.returncode != 0 and (time.time() - last_err_msg) > 30:
+                    out = ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+                    tail = out[-400:] if out else ""
+                    if tail:
+                        print(f"    (cmsh output tail): {tail}")
+                    last_err_msg = time.time()
+            except Exception:
+                # Transient SSH errors while BCM is busy are common; keep polling.
+                pass
+
+            time.sleep(max(1, interval))
+
+        print(f"    ✗ Timed out waiting for switches UP (timeout={timeout}s)")
+        return False
+
+    def _reset_nodes_via_air(self, include_prefixes: list[str] | None = None, include_names: list[str] | None = None) -> tuple[bool, list[str]]:
+        """
+        Reset selected nodes via Air API:
+          POST /api/v2/simulations/nodes/{id}/control/ {"action": "reset"}
+
+        Selection:
+          - include_names: explicit node names to reset
+          - include_prefixes: reset nodes whose names start with any of these prefixes (case-insensitive)
+        """
+        if not self.simulation_id:
+            print("    ✗ Cannot reset nodes: simulation_id is not set")
+            return False, []
+
+        prefixes = [str(p).strip().lower() for p in (include_prefixes or []) if str(p).strip()]
+        names = {str(n).strip().lower() for n in (include_names or []) if str(n).strip()}
+
+        try:
+            sim_nodes = self._list_simulation_nodes_v2()
+        except Exception as e:
+            print(f"    ✗ Could not list simulation nodes for reset: {e}")
+            return False, []
+
+        targets: list[tuple[str, str]] = []
+        for n in sim_nodes:
+            try:
+                nid = n.get("id")
+                nm = str(n.get("name") or "").strip()
+                if not nid or not nm:
+                    continue
+                nm_l = nm.lower()
+                if nm_l.startswith("bcm"):
+                    continue
+                if nm_l in names:
+                    targets.append((nm, str(nid)))
+                    continue
+                if prefixes and any(nm_l.startswith(p) for p in prefixes):
+                    targets.append((nm, str(nid)))
+            except Exception:
+                continue
+
+        # Deduplicate by id
+        uniq: dict[str, str] = {}
+        for nm, nid in targets:
+            uniq[str(nid)] = nm
+        targets = [(nm, nid) for nid, nm in uniq.items()]
+
+        if not targets:
+            print("    ⚠ No nodes matched for reset (skipping)")
+            return True, []
+
+        print(f"    Nodes to reset ({len(targets)}): {', '.join([nm for nm, _ in targets])}")
+        base = self.api_base_url.rstrip("/")
+        ok = True
+        for nm, nid in targets:
+            try:
+                print(f"    Resetting {nm} ({nid})...")
+                r = requests.post(
+                    f"{base}/api/v2/simulations/nodes/{nid}/control/",
+                    headers=self.headers,
+                    json={"action": "reset"},
+                    timeout=30,
+                )
+                if r.status_code not in (200, 201, 202):
+                    print(f"      ✗ Reset failed ({r.status_code}): {r.text[:200]}")
+                    ok = False
+                else:
+                    print("      ✓ Reset requested")
+            except Exception as e:
+                print(f"      ✗ Reset error: {e}")
+                ok = False
+
+        reset_names = [nm for nm, _ in targets]
+        return ok, reset_names
 
     def _detect_switch_node_names(self, topology_dir: Path, switch_configs_dir: str | None) -> list[str]:
         """
