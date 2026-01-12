@@ -3077,7 +3077,7 @@ Host bcm
                             "prefixes": prefixes,
                             "nodes": explicit_nodes,
                             "installer_failed_monitoring": bool(config.get("installer_failed_monitoring", False)),
-                            "installer_failed_timeout": int(config.get("installer_failed_timeout", 900) or 900),
+                            "installer_failed_timeout": int(config.get("installer_failed_timeout", 1800) or 1800),
                             "installer_failed_interval": int(config.get("installer_failed_interval", 20) or 20),
                         }
                     )
@@ -3209,7 +3209,7 @@ Host bcm
                     break
                 # Optional: some Air labs report INSTALLER_FAILED after the first reset; reset again once observed.
                 if act.get("installer_failed_monitoring", False) and reset_names:
-                    timeout = int(act.get("installer_failed_timeout", 900) or 900)
+                    timeout = int(act.get("installer_failed_timeout", 1800) or 1800)
                     interval = int(act.get("installer_failed_interval", 20) or 20)
                     ok = self._wait_for_nodes_status(
                         ssh_config_file=ssh_config_file,
