@@ -2528,6 +2528,18 @@ Host bcm
         script_content = script_content.replace('__INTERNALNET_IP__', str(self.bcm_internalnet_ip_primary or ""))
         script_content = script_content.replace('__INTERNALNET_BASE__', str(self.bcm_internalnet_base or ""))
         script_content = script_content.replace('__INTERNALNET_PREFIXLEN__', str(self.bcm_internalnet_prefixlen or ""))
+
+        # Optional: pin the Ansible Galaxy collection version for installer110 to match BCM minor.
+        # This matters because installer110 is actively updated and newer collection releases
+        # may assume newer BCM repos/package names (e.g., Slurm package naming).
+        pin = self._select_installer110_collection_version(bcm_version=bcm_version)
+        # For BCM 11.x we prefer deterministic installs. If we can't pin (e.g. Galaxy API unreachable),
+        # set a sentinel so the remote install script will fail fast instead of silently using "latest".
+        if str(bcm_version).startswith("11.") and not pin:
+            pin = "__AUTO_PIN_REQUIRED__"
+        if str(bcm_version).startswith("11."):
+            print(f"  ℹ installer110 pin for BCM {bcm_version}: {pin}")
+        script_content = script_content.replace('__BCM_COLLECTION_VERSION__', pin or "")
         
         # Write to temp file
         temp_script = Path('/tmp/bcm_install.sh')
@@ -2564,6 +2576,70 @@ Host bcm
         except subprocess.CalledProcessError as e:
             print(f"\n✗ Script upload failed: {e}")
             return False
+
+    def _select_installer110_collection_version(self, bcm_version: str) -> str | None:
+        """
+        Pick an installer110 collection version that aligns with the BCM 11.<minor>.x ISO.
+
+        Policy:
+          - If BCM_INSTALLER110_VERSION is set, use it verbatim (escape hatch).
+          - Else, query Ansible Galaxy and pick the latest version whose prefix matches:
+              <bcm_minor>.0.*
+            Examples:
+              BCM 11.30.0 -> installer110 30.0.433+git...
+              BCM 11.31.0 -> installer110 31.0.448+git...
+
+        Returns the exact version string to pass to:
+          ansible-galaxy collection install brightcomputing.installer110:<version>
+        """
+        override = (os.getenv("BCM_INSTALLER110_VERSION") or "").strip()
+        if override:
+            return override
+
+        if not bcm_version or not str(bcm_version).startswith("11."):
+            return None
+
+        parts = str(bcm_version).split(".")
+        if len(parts) < 2:
+            return None
+        bcm_minor = parts[1].strip()
+        if not bcm_minor.isdigit():
+            return None
+
+        want_prefix = f"{int(bcm_minor)}.0."
+
+        # Query Ansible Galaxy collection versions endpoint.
+        # Example:
+        #   https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/brightcomputing/installer110/versions/
+        url = "https://galaxy.ansible.com/api/v3/plugin/ansible/content/published/collections/index/brightcomputing/installer110/versions/"
+        try:
+            r = requests.get(url, params={"page_size": 200}, timeout=20)
+            r.raise_for_status()
+            payload = r.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, list):
+                return None
+            versions = [str(x.get("version")) for x in data if isinstance(x, dict) and x.get("version")]
+        except Exception:
+            return None
+
+        cand = [v for v in versions if v.startswith(want_prefix)]
+        if not cand:
+            return None
+
+        def _key(v: str) -> tuple[int, int, int]:
+            # v looks like: "31.0.448+gitd75af15"
+            base = v.split("+", 1)[0]
+            ps = base.split(".")
+            try:
+                a = int(ps[0]) if len(ps) > 0 else 0
+                b = int(ps[1]) if len(ps) > 1 else 0
+                c = int(ps[2]) if len(ps) > 2 else 0
+            except Exception:
+                return (0, 0, 0)
+            return (a, b, c)
+
+        return sorted(cand, key=_key)[-1]
     
     def upload_bcm_collection_patch(self, bcm_version, ssh_config_file):
         """
@@ -2572,6 +2648,12 @@ Host bcm
         If scripts/patches/<bcm_version>.py exists locally, upload it to:
           /home/ubuntu/bcm_patches/<bcm_version>.py
         """
+        # Disable BCM 11.31.0 patch for now to validate whether the latest installer110
+        # collection version makes it unnecessary.
+        if str(bcm_version).strip() == "11.31.0":
+            print("  ℹ Skipping BCM collection patch for 11.31.0 (disabled for validation)")
+            return True
+
         patch_src = Path(__file__).parent / 'scripts' / 'patches' / f'{bcm_version}.py'
         if not patch_src.exists():
             print("  ℹ No BCM collection patch for this version")
@@ -3090,7 +3172,7 @@ Host bcm
                 else:
                     switches = []
                 if switches:
-                    ok = self._reset_nodes_via_air(include_names=switches)
+                    ok, _ = self._reset_nodes_via_air(include_names=switches)
                 else:
                     switch_cfg_dir = (act.get("switch_configs_dir") or "").strip()
                     ok = self._reset_switch_nodes_via_air(topology_dir=topology_dir, switch_configs_dir=switch_cfg_dir)
@@ -3454,17 +3536,38 @@ Host bcm
           GET /api/v2/simulations/nodes/?simulation=<sim_id>
         """
         base = self.api_base_url.rstrip("/")
-        r = requests.get(
-            f"{base}/api/v2/simulations/nodes/",
-            headers=self.headers,
-            params={"simulation": self.simulation_id},
-            timeout=30,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if isinstance(data, list):
-            return data
-        return data.get("results", []) or []
+        if not self.simulation_id:
+            return []
+
+        # Air's v2 endpoints are typically paginated; ensure we fetch all pages so we don't
+        # "miss" nodes (e.g. cpu-* nodes not on the first page).
+        url = f"{base}/api/v2/simulations/nodes/"
+        params: dict[str, object] = {"simulation": self.simulation_id, "page_size": 200}
+        out: list[dict] = []
+
+        while True:
+            r = requests.get(url, headers=self.headers, params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, list):
+                out.extend([x for x in data if isinstance(x, dict)])
+                break
+            if not isinstance(data, dict):
+                break
+
+            results = data.get("results", []) or []
+            if isinstance(results, list):
+                out.extend([x for x in results if isinstance(x, dict)])
+
+            nxt = data.get("next")
+            if not nxt:
+                break
+
+            # When following "next", the URL already contains query params; drop params to avoid conflicts.
+            url = str(nxt)
+            params = {}
+
+        return out
 
     def _reset_switch_nodes_via_air(self, topology_dir: Path, switch_configs_dir: str | None = None) -> bool:
         """

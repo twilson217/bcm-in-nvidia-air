@@ -33,6 +33,17 @@ else
     BCM_ROLE="brightcomputing.installer100.head_node"
 fi
 
+# Optional: pin the Ansible Galaxy collection version (set by deploy_bcm_air.py).
+# Example installer110 versions:
+#   - 30.0.433+git416a00e  (aligns with BCM 11.30.x)
+#   - 31.0.448+gitd75af15  (aligns with BCM 11.31.x)
+#
+# Note: deploy_bcm_air.py will replace this placeholder with either:
+#   - an exact version string (preferred), or
+#   - "__AUTO_PIN_REQUIRED__" (meaning: fail fast), or
+#   - "" (meaning: unpinned; allowed only for BCM 10)
+BCM_COLLECTION_VERSION="__BCM_COLLECTION_VERSION__"
+
 echo "=============================================="
 echo "BCM ${BCM_VERSION} Installation Script"
 echo "=============================================="
@@ -187,7 +198,24 @@ export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
 #
 # Since v0.7.0 generates the scaffolding inline (no external requirements.yml),
 # we must install these explicitly.
-ansible-galaxy collection install "${BCM_COLLECTION}" --force
+if [ "${BCM_VERSION}" == "11" ]; then
+    # For BCM 11, do NOT allow silently installing "latest" installer110. The collection is
+    # actively updated and newer versions can assume newer BCM repos (e.g., Slurm package names).
+    #
+    # We only treat pin as missing if it's empty or explicitly marked as required but unavailable.
+    if [ -z "${BCM_COLLECTION_VERSION}" ] || [ "${BCM_COLLECTION_VERSION}" == "__AUTO_PIN_REQUIRED__" ]; then
+        echo "  ✗ ERROR: installer110 version pin is required for BCM ${BCM_FULL_VERSION}, but was not provided/determined."
+        echo "    Set BCM_INSTALLER110_VERSION to an exact collection version (examples: 30.0.433+git..., 31.0.448+git...) and re-run."
+        exit 2
+    fi
+fi
+
+if [ -n "${BCM_COLLECTION_VERSION}" ] && [ "${BCM_COLLECTION_VERSION}" != "__AUTO_PIN_REQUIRED__" ]; then
+    echo "  Using pinned collection: ${BCM_COLLECTION}:${BCM_COLLECTION_VERSION}"
+    ansible-galaxy collection install "${BCM_COLLECTION}:${BCM_COLLECTION_VERSION}" --force
+else
+    ansible-galaxy collection install "${BCM_COLLECTION}" --force
+fi
 ansible-galaxy collection install community.general --force
 ansible-galaxy collection install community.mysql --force
 ansible-galaxy collection install community.crypto --force

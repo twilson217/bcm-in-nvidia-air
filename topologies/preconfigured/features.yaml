@@ -13,7 +13,7 @@ bcm_switches:
   enabled: true
   config_file:
     "10": bcm-config/switches_v10.cmsh     # Only BCM 10 tested so far.
-    # "11": bcm-config/switches_v11.cmsh   # Not yet supported by the deployment script.
+    "11": bcm-config/switches_v11.cmsh   # Not yet supported by the deployment script.
   # switch_configs: Optional directory containing per-switch configuration files
   switch_configs_dir: bcm-config/switch-configs/
   # Preferred: explicit list of switch node names to reset (power-cycle) after ZTP is configured.
