@@ -2648,10 +2648,10 @@ Host bcm
         If scripts/patches/<bcm_version>.py exists locally, upload it to:
           /home/ubuntu/bcm_patches/<bcm_version>.py
         """
-        # Disable BCM 11.31.0 patch for now to validate whether the latest installer110
-        # collection version makes it unnecessary.
-        if str(bcm_version).strip() == "11.31.0":
-            print("  ℹ Skipping BCM collection patch for 11.31.0 (disabled for validation)")
+        # Allow opting out of per-version patching (useful for validation runs),
+        # but default to applying patches when present.
+        if os.getenv("BCM_SKIP_COLLECTION_PATCH", "").strip().lower() in ("1", "true", "yes"):
+            print("  ℹ Skipping BCM collection patch upload (BCM_SKIP_COLLECTION_PATCH set)")
             return True
 
         patch_src = Path(__file__).parent / 'scripts' / 'patches' / f'{bcm_version}.py'
@@ -3433,7 +3433,10 @@ Host bcm
         names = {str(n).strip().lower() for n in (include_names or []) if str(n).strip()}
 
         try:
-            sim_nodes = self._list_simulation_nodes_v2()
+            # Prefer SDK-based node listing when available; on some Air deployments
+            # (notably air-inside), the REST v2 node listing can omit certain node types
+            # even though the SDK returns them (e.g. cpu-* PXE nodes).
+            sim_nodes = self._list_simulation_nodes_any()
         except Exception as e:
             print(f"    ✗ Could not list simulation nodes for reset: {e}")
             return False, []
@@ -3464,6 +3467,13 @@ Host bcm
 
         if not targets:
             print("    ⚠ No nodes matched for reset (skipping)")
+            # Debug hint: show what node names we *did* see from the API/SDK.
+            try:
+                seen = sorted({str(n.get("name") or "").strip() for n in (sim_nodes or []) if str(n.get("name") or "").strip()})
+                if seen:
+                    print(f"    (debug) nodes visible to reset logic ({len(seen)}): {', '.join(seen)}")
+            except Exception:
+                pass
             return True, []
 
         print(f"    Nodes to reset ({len(targets)}): {', '.join([nm for nm, _ in targets])}")
@@ -3569,6 +3579,41 @@ Host bcm
 
         return out
 
+    def _list_simulation_nodes_any(self) -> list[dict]:
+        """
+        List simulation nodes using the most reliable method available.
+
+        Preference order:
+          1) Air SDK (bearer token) via sim.nodes
+          2) REST v2 endpoint (/api/v2/simulations/nodes/?simulation=<id>)
+
+        Reason: on some deployments, REST listing can be incomplete while the SDK remains complete.
+        """
+        if not getattr(self, "simulation_id", None):
+            return []
+
+        # 1) SDK
+        try:
+            if getattr(self, "no_sdk", False):
+                raise RuntimeError("SDK disabled by --no-sdk")
+            from air_sdk import AirApi  # type: ignore
+
+            air = AirApi(api_url=self.api_base_url, bearer_token=self.jwt_token)
+            sim = air.simulations.get(self.simulation_id)
+            nodes: list[dict] = []
+            for n in list(sim.nodes):
+                nm = getattr(n, "name", None)
+                nid = getattr(n, "id", None)
+                if nm and nid:
+                    nodes.append({"name": str(nm), "id": str(nid)})
+            if nodes:
+                return nodes
+        except Exception:
+            pass
+
+        # 2) REST
+        return self._list_simulation_nodes_v2()
+
     def _reset_switch_nodes_via_air(self, topology_dir: Path, switch_configs_dir: str | None = None) -> bool:
         """
         Reset switch nodes via Air API so they retry ZTP.
@@ -3581,7 +3626,8 @@ Host bcm
             return False
 
         try:
-            sim_nodes = self._list_simulation_nodes_v2()
+            # Use the most reliable node listing method available (SDK preferred).
+            sim_nodes = self._list_simulation_nodes_any()
         except Exception as e:
             print(f"    ✗ Could not list simulation nodes for reset: {e}")
             return False
