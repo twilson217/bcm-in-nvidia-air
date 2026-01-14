@@ -10,3 +10,7 @@ cmsh -c "device;add physicalnode cpu-03 10.1.37.13 bond0;set category default;in
 cmsh -c "device;use cpu-03;interfaces;remove bootif;commit"
 cmsh -c "device;add physicalnode cpu-04 10.1.37.14 bond0;set category default;interfaces;add physical ens8;set mac 48:B0:2D:E7:55:03;add physical ens9;set mac 48:B0:2D:E4:61:61;use bond0;set network hpcnet;set interfaces ens8 ens9;set ip 10.1.37.14;..;..;set provisioninginterface bond0;set mac 48:B0:2D:E7:55:03;commit"
 cmsh -c "device;use cpu-04;interfaces;remove bootif;commit"
+cmsh -c "device;add physicalnode k8s-01 10.1.37.15 bond0;set category default;interfaces;add physical ens8;set mac 48:B0:2D:7E:0A:7C;add physical ens9;set mac 48:B0:2D:FA:54:B0;use bond0;set network hpcnet;set interfaces ens8 ens9;set ip 10.1.37.15;..;..;set provisioninginterface bond0;set mac 48:B0:2D:7E:0A:7C;commit"
+cmsh -c "device;use k8s;interfaces;remove bootif;commit"
+cmsh -c "device;add physicalnode runai-01 10.1.37.16 bond0;set category default;interfaces;add physical ens8;set mac 48:b0:2d:53:bf:9e;add physical ens9;set mac 48:b0:2d:44:5c:50;use bond0;set network hpcnet;set interfaces ens8 ens9;set ip 10.1.37.16;..;..;set provisioninginterface bond0;set mac 48:b0:2d:53:bf:9e;commit"
+cmsh -c "device;use runai;interfaces;remove bootif;commit"

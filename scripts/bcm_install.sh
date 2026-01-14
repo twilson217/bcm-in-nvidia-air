@@ -741,19 +741,90 @@ fi
 
 # Install BCM apt repositories from the ISO
 # These packages set up the BCM apt sources for future package installations
-# Package location: /mnt/dvd/data/packages/<VERSION>/ubuntu/2404/all/cm-config-apt*.deb
-echo "  Installing BCM apt repositories..."
-BCM_APT_PKGS="${BCM_MOUNT_PATH}/data/packages/${BCM_FULL_VERSION}/ubuntu/2404/all/cm-config-apt*.deb"
-if compgen -G "${BCM_APT_PKGS}" > /dev/null 2>&1; then
-    # Use apt install with the glob pattern to install all matching packages
-    apt-get install -y -qq ${BCM_APT_PKGS} 2>&1 || {
-        echo "  ⚠ Failed to install apt repos, trying dpkg..."
-        dpkg -i ${BCM_APT_PKGS} 2>/dev/null || true
-    }
-    echo "  ✓ BCM apt repositories installed"
+#
+# NOTE: ISO mount roots vary between BCM 10 and 11 installs in Air. In some labs BCM 10
+# uses a nested cdrom mount path: /mnt/dvd/cdrom/...
+#
+echo "  Installing BCM apt repositories on head node..."
+
+find_iso_pkg_dir() {
+    local v="$1"
+    local candidates=(
+        "${BCM_MOUNT_PATH}/data/packages/${v}/ubuntu/2404/all"
+        "${BCM_MOUNT_PATH}/cdrom/data/packages/${v}/ubuntu/2404/all"
+    )
+    local d=""
+    for d in "${candidates[@]}"; do
+        if [ -d "$d" ]; then
+            echo "$d"
+            return 0
+        fi
+    done
+    return 1
+}
+
+ISO_DIR=""
+if ISO_DIR="$(find_iso_pkg_dir "${BCM_FULL_VERSION}")"; then
+    # Build package list with optional add-ons.
+    shopt -s nullglob
+    pkgs=( "${ISO_DIR}"/cm-config-apt_*.deb )
+    # BCM10: cm-config-apt-ml_*.deb (if present)
+    pkgs+=( "${ISO_DIR}"/cm-config-apt-ml_*.deb )
+    # BCM11: cm-config-apt-cuda_*.deb (if present)
+    pkgs+=( "${ISO_DIR}"/cm-config-apt-cuda_*.deb )
+    shopt -u nullglob
+
+    if [ ${#pkgs[@]} -eq 0 ]; then
+        echo "  ⚠ No cm-config-apt packages found under: ${ISO_DIR}"
+        echo "    (This is expected for some BCM versions or ISO layouts)"
+    else
+        # Non-interactive install from local .deb files
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get install -y -qq --no-install-recommends "${pkgs[@]}" 2>/dev/null || \
+          apt-get install -y -qq --no-install-recommends "${ISO_DIR}"/cm-config-apt_*.deb
+        echo "  ✓ BCM apt repositories installed on head node"
+    fi
 else
-    echo "  ⚠ No cm-config-apt packages found at: ${BCM_APT_PKGS}"
-    echo "    (This is expected for some BCM versions or ISO layouts)"
+    echo "  ⚠ Could not locate ISO package dir for BCM ${BCM_FULL_VERSION} (skipping head node repo install)"
+fi
+
+# Also install these repo packages into the default software image so nodes/images can
+# resolve BCM repos consistently (script-friendly via cm-chroot).
+echo "  Installing BCM apt repositories into default-image (if present)..."
+IMG="/cm/images/default-image"
+if [ -d "${IMG}" ] && command -v cm-chroot >/dev/null 2>&1; then
+    ISO_DIR=""
+    if ISO_DIR="$(find_iso_pkg_dir "${BCM_FULL_VERSION}")"; then
+        STAGE_DIR="${IMG}/tmp/cm-repo-debs"
+        rm -rf "${STAGE_DIR}"
+        mkdir -p "${STAGE_DIR}"
+
+        shopt -s nullglob
+        cp -v "${ISO_DIR}"/cm-config-apt_*.deb "${STAGE_DIR}/"
+        cp -v "${ISO_DIR}"/cm-config-apt-ml_*.deb "${STAGE_DIR}/" 2>/dev/null || true
+        cp -v "${ISO_DIR}"/cm-config-apt-cuda_*.deb "${STAGE_DIR}/" 2>/dev/null || true
+        shopt -u nullglob
+
+        cm-chroot "${IMG}" /bin/bash -lc '
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          shopt -s nullglob
+          pkgs=(/tmp/cm-repo-debs/cm-config-apt_*.deb /tmp/cm-repo-debs/cm-config-apt-ml_*.deb /tmp/cm-repo-debs/cm-config-apt-cuda_*.deb)
+          if [ ${#pkgs[@]} -eq 0 ]; then
+            echo "WARN: no cm-config-apt debs staged under /tmp/cm-repo-debs (skipping)"
+            exit 0
+          fi
+          apt-get install -y --no-install-recommends "${pkgs[@]}" 2>/dev/null || \
+            apt-get install -y --no-install-recommends /tmp/cm-repo-debs/cm-config-apt_*.deb
+        '
+
+        rm -rf "${STAGE_DIR}"
+        echo "  ✓ BCM apt repositories installed into default-image"
+    else
+        echo "  ⚠ Could not locate ISO package dir for BCM ${BCM_FULL_VERSION} (skipping default-image repo install)"
+    fi
+else
+    echo "  ℹ default-image not present or cm-chroot not available (skipping default-image repo install)"
 fi
 
 # Enable TFTP for PXE boot
