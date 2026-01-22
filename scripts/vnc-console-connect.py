@@ -304,6 +304,56 @@ def find_ssh_service_port(api_url: str, jwt: str, sim_id: str, worker_hostname: 
     """
     services = get_simulation_services(api_url, jwt, sim_id)
     
+    def _normalize_host(h: object) -> str:
+        return str(h or "").strip()
+
+    def _pick_external_port(svc_obj: dict) -> Optional[str]:
+        """
+        Air service objects vary across deployments. Common fields:
+          - host / dest_host: workerXX.<air-domain>
+          - src_port: externally reachable port on the worker
+          - dest_port: internal port on the target (often 22 for SSH)
+          - port: sometimes used as external port on older variants
+
+        We prefer the non-22 port when one side is 22.
+        """
+        src = svc_obj.get("src_port")
+        dest = svc_obj.get("dest_port")
+        port = svc_obj.get("port")
+
+        # Normalize to ints when possible.
+        def _to_int(x: object) -> Optional[int]:
+            try:
+                if x is None:
+                    return None
+                return int(str(x).strip())
+            except Exception:
+                return None
+
+        src_i = _to_int(src)
+        dest_i = _to_int(dest)
+        port_i = _to_int(port)
+
+        # Most common: src_port=<external-high-port>, dest_port=22
+        if src_i and src_i != 22 and dest_i == 22:
+            return str(src_i)
+        # Less common: dest_port=<external-high-port>, src_port=22
+        if dest_i and dest_i != 22 and src_i == 22:
+            return str(dest_i)
+        # If one of them is a high port, take it.
+        for cand in (src_i, dest_i, port_i):
+            if cand and cand != 22 and cand > 1024:
+                return str(cand)
+        # Fallback: if port exists and is not obviously wrong
+        if port_i and port_i != 0:
+            return str(port_i)
+        if src_i and src_i != 0:
+            return str(src_i)
+        if dest_i and dest_i != 0:
+            return str(dest_i)
+        return None
+
+    worker_norm = _normalize_host(worker_hostname)
     for svc in services:
         # v2 Service objects typically have: name, service_type, src_port, dest_port, host
         # Some older objects used: dest_host, dest_port
@@ -311,23 +361,80 @@ def find_ssh_service_port(api_url: str, jwt: str, sim_id: str, worker_hostname: 
         svc_type = str(svc.get("service_type", "")).lower()
 
         # Determine "host" field where the service is reachable (usually workerXX...).
-        svc_host = svc.get("host") or svc.get("dest_host") or ""
-        svc_host = str(svc_host)
+        svc_host = _normalize_host(svc.get("host") or svc.get("dest_host"))
 
-        # Determine external port (dest_port in v2).
-        dest_port = svc.get("dest_port") or svc.get("port")
-
-        # Determine internal/source port (22 for SSH).
         src_port = svc.get("src_port")
-
-        is_ssh = ("ssh" in svc_name) or (svc_type == "ssh") or (src_port == 22)
+        is_ssh = ("ssh" in svc_name) or (svc_type == "ssh") or (src_port == 22) or (str(src_port).strip() == "22")
         if not is_ssh:
             continue
 
-        if svc_host == worker_hostname and dest_port:
-            return str(dest_port)
+        ext_port = _pick_external_port(svc)
+        if svc_host == worker_norm and ext_port:
+            return ext_port
     
     return None
+
+
+def get_ssh_service_ports_by_worker(api_url: str, jwt: str, sim_id: str) -> Dict[str, str]:
+    """
+    Build a mapping of worker hostname -> externally reachable SSH port for the simulation.
+
+    If multiple SSH services exist, any one can work, but the worker/port pair must match.
+    """
+    services = get_simulation_services(api_url, jwt, sim_id)
+
+    def _normalize_host(h: object) -> str:
+        return str(h or "").strip()
+
+    def _to_int(x: object) -> Optional[int]:
+        try:
+            if x is None:
+                return None
+            return int(str(x).strip())
+        except Exception:
+            return None
+
+    def _pick_external_port(svc_obj: dict) -> Optional[str]:
+        """
+        Prefer the non-22 port when one side is 22. Typical:
+          src_port=<external-high-port>, dest_port=22
+        """
+        src_i = _to_int(svc_obj.get("src_port"))
+        dest_i = _to_int(svc_obj.get("dest_port"))
+        port_i = _to_int(svc_obj.get("port"))
+
+        if src_i and src_i != 22 and dest_i == 22:
+            return str(src_i)
+        if dest_i and dest_i != 22 and src_i == 22:
+            return str(dest_i)
+        for cand in (src_i, dest_i, port_i):
+            if cand and cand != 22 and cand > 1024:
+                return str(cand)
+        for cand in (port_i, src_i, dest_i):
+            if cand and cand != 0:
+                return str(cand)
+        return None
+
+    out: Dict[str, str] = {}
+    for svc in services or []:
+        if not isinstance(svc, dict):
+            continue
+
+        svc_name = str(svc.get("name", "")).lower()
+        svc_type = str(svc.get("service_type", "")).lower()
+        src_port = svc.get("src_port")
+        is_ssh = ("ssh" in svc_name) or (svc_type == "ssh") or (src_port == 22) or (str(src_port).strip() == "22")
+        if not is_ssh:
+            continue
+
+        host = _normalize_host(svc.get("host") or svc.get("dest_host"))
+        port = _pick_external_port(svc)
+        if not host or not port:
+            continue
+
+        out.setdefault(host, port)
+
+    return out
 
 
 def match_simulation_to_ssh_config(simulations: List[dict]) -> Tuple[Optional[dict], Optional[Path], Optional[dict]]:
@@ -402,8 +509,9 @@ def prompt_user_selection(simulations: List[dict]) -> Optional[dict]:
 
 def print_vnc_info(
     nodes: List[dict],
-    ssh_service_port: Optional[str],
-    worker_hostname: Optional[str],
+    ssh_ports_by_worker: Dict[str, str],
+    default_worker: Optional[str],
+    default_ssh_port: Optional[str],
 ) -> None:
     """Print VNC connection information for all nodes."""
     print()
@@ -411,13 +519,14 @@ def print_vnc_info(
     print("VNC CONSOLE CONNECTION INFO")
     print("=" * 70)
     
-    if not ssh_service_port:
+    if not ssh_ports_by_worker and not default_ssh_port:
         print()
         print("⚠ You must create an SSH service for your simulation before you can")
         print("  use VNC to connect to a console.")
         print()
         return
     
+    user = "ubuntu"
     for node in nodes:
         name = node.get("name", "unknown")
         console_url = node.get("console_url", "")
@@ -434,9 +543,20 @@ def print_vnc_info(
             continue
         
         node_worker, internal_ip, _ = parse_console_url(console_url)
-        display_hostname = worker_hostname or node_worker
-        
-        print(f"  SSH Tunnel: ssh -L {console_port}:{internal_ip}:{console_port} {display_hostname} -p {ssh_service_port}")
+        # Prefer the worker from the console URL so the worker/port pair matches up.
+        display_hostname = node_worker or default_worker or ""
+        ssh_port = ssh_ports_by_worker.get(node_worker) or default_ssh_port
+        if not display_hostname or not ssh_port:
+            print("  ⚠ Could not determine a valid SSH tunnel destination for this node")
+            continue
+        if node_worker and node_worker not in ssh_ports_by_worker and default_ssh_port:
+            print(f"  ⚠ No SSH service matched worker {node_worker}; falling back to default SSH port")
+
+        # Include a username and ensure we print the external SSH service port.
+        print(
+            f"  SSH Tunnel: ssh -L {console_port}:{internal_ip}:{console_port} "
+            f"{user}@{display_hostname} -p {ssh_port}"
+        )
         print(f"  VNC Connect: localhost:{console_port}")
         print(f"  VNC Password: {console_password}")
     
@@ -617,18 +737,35 @@ def main() -> int:
         
         # Sort by name
         nodes.sort(key=lambda n: n.get("name", ""))
-        
-        # If we don't have SSH service info from config, look it up via API
-        if not ssh_service_port:
-            # Get worker hostname from first node with console_url
+
+        # Determine a default worker from the first node that has a console URL.
+        default_worker: Optional[str] = worker_hostname
+        if not default_worker:
             for node in nodes:
                 console_url = node.get("console_url", "")
                 if console_url:
-                    worker_hostname, _, _ = parse_console_url(console_url)
+                    default_worker, _, _ = parse_console_url(console_url)
                     break
-            
-            if worker_hostname:
-                ssh_service_port = find_ssh_service_port(api_url, jwt, sim_id, worker_hostname)
+
+        # Build a worker->externalPort map from the API (supports multi-worker sims and avoids
+        # trusting a config file that might mistakenly say Port 22).
+        ssh_ports_by_worker: Dict[str, str] = {}
+        try:
+            ssh_ports_by_worker = get_ssh_service_ports_by_worker(api_url, jwt, sim_id)
+        except Exception:
+            ssh_ports_by_worker = {}
+
+        # Choose a default SSH port:
+        # - Prefer the service-derived port for the default worker
+        # - Otherwise use a non-22 port from the ssh config (if present)
+        # - Otherwise attempt a direct lookup for the default worker
+        default_ssh_port: Optional[str] = None
+        if default_worker and ssh_ports_by_worker.get(default_worker):
+            default_ssh_port = ssh_ports_by_worker.get(default_worker)
+        elif ssh_service_port and str(ssh_service_port).strip() and str(ssh_service_port).strip() != "22":
+            default_ssh_port = str(ssh_service_port).strip()
+        elif default_worker:
+            default_ssh_port = find_ssh_service_port(api_url, jwt, sim_id, default_worker)
         
         # Handle --ssh-config mode
         if args.ssh_config:
@@ -656,7 +793,7 @@ def main() -> int:
             return 0 if update_ssh_config(config_path, nodes, bcm_config) > 0 else 1
         
         # Default mode: print VNC info
-        print_vnc_info(nodes, ssh_service_port, worker_hostname)
+        print_vnc_info(nodes, ssh_ports_by_worker, default_worker, default_ssh_port)
         
         return 0
         
@@ -675,3 +812,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

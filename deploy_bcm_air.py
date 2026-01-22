@@ -3432,6 +3432,34 @@ Host bcm
         prefixes = [str(p).strip().lower() for p in (include_prefixes or []) if str(p).strip()]
         names = {str(n).strip().lower() for n in (include_names or []) if str(n).strip()}
 
+        def _node_name(node: dict) -> str:
+            # Primary field in Air v2 + our SDK wrapper is "name", but be tolerant.
+            for k in ("name", "hostname", "label", "display_name", "title"):
+                v = node.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return ""
+
+        def _match(sim_nodes: list[dict]) -> list[tuple[str, str]]:
+            out: list[tuple[str, str]] = []
+            for n in sim_nodes:
+                try:
+                    nid = n.get("id")
+                    nm = _node_name(n)
+                    if not nid or not nm:
+                        continue
+                    nm_l = nm.lower()
+                    if nm_l.startswith("bcm"):
+                        continue
+                    if nm_l in names:
+                        out.append((nm, str(nid)))
+                        continue
+                    if prefixes and any(nm_l.startswith(p) for p in prefixes):
+                        out.append((nm, str(nid)))
+                except Exception:
+                    continue
+            return out
+
         try:
             # Prefer SDK-based node listing when available; on some Air deployments
             # (notably air-inside), the REST v2 node listing can omit certain node types
@@ -3441,23 +3469,18 @@ Host bcm
             print(f"    ✗ Could not list simulation nodes for reset: {e}")
             return False, []
 
-        targets: list[tuple[str, str]] = []
-        for n in sim_nodes:
-            try:
-                nid = n.get("id")
-                nm = str(n.get("name") or "").strip()
-                if not nid or not nm:
+        targets = _match(sim_nodes)
+        # Best-effort retries: if nothing matched, re-list a few times (API/SDK can be eventually consistent).
+        if not targets and (names or prefixes):
+            for _ in range(2):
+                time.sleep(2)
+                try:
+                    sim_nodes = self._list_simulation_nodes_any()
+                except Exception:
                     continue
-                nm_l = nm.lower()
-                if nm_l.startswith("bcm"):
-                    continue
-                if nm_l in names:
-                    targets.append((nm, str(nid)))
-                    continue
-                if prefixes and any(nm_l.startswith(p) for p in prefixes):
-                    targets.append((nm, str(nid)))
-            except Exception:
-                continue
+                targets = _match(sim_nodes)
+                if targets:
+                    break
 
         # Deduplicate by id
         uniq: dict[str, str] = {}
@@ -3469,7 +3492,7 @@ Host bcm
             print("    ⚠ No nodes matched for reset (skipping)")
             # Debug hint: show what node names we *did* see from the API/SDK.
             try:
-                seen = sorted({str(n.get("name") or "").strip() for n in (sim_nodes or []) if str(n.get("name") or "").strip()})
+                seen = sorted({_node_name(n) for n in (sim_nodes or []) if _node_name(n)})
                 if seen:
                     print(f"    (debug) nodes visible to reset logic ({len(seen)}): {', '.join(seen)}")
             except Exception:
@@ -3592,7 +3615,7 @@ Host bcm
         if not getattr(self, "simulation_id", None):
             return []
 
-        # 1) SDK
+        sdk_nodes: list[dict] = []
         try:
             if getattr(self, "no_sdk", False):
                 raise RuntimeError("SDK disabled by --no-sdk")
@@ -3600,19 +3623,52 @@ Host bcm
 
             air = AirApi(api_url=self.api_base_url, bearer_token=self.jwt_token)
             sim = air.simulations.get(self.simulation_id)
-            nodes: list[dict] = []
             for n in list(sim.nodes):
                 nm = getattr(n, "name", None)
                 nid = getattr(n, "id", None)
                 if nm and nid:
-                    nodes.append({"name": str(nm), "id": str(nid)})
-            if nodes:
-                return nodes
+                    sdk_nodes.append({"name": str(nm), "id": str(nid)})
         except Exception:
             pass
 
         # 2) REST
-        return self._list_simulation_nodes_v2()
+        rest_nodes: list[dict] = []
+        try:
+            rest_nodes = self._list_simulation_nodes_v2()
+        except Exception:
+            rest_nodes = []
+
+        # Merge (union) SDK + REST rather than choosing one.
+        #
+        # Important: we previously returned SDK nodes if non-empty. In some environments,
+        # SDK can be *partially* populated (e.g., missing cpu-* PXE nodes) while REST has them.
+        # Union keeps reset logic stable across API variants.
+        merged: dict[str, dict] = {}
+
+        def _add(nodes: list[dict]):
+            for n in nodes or []:
+                if not isinstance(n, dict):
+                    continue
+                nid = str(n.get("id") or "").strip()
+                nm = str(n.get("name") or "").strip()
+                if not nid and not nm:
+                    continue
+                key = nid or nm
+                if key not in merged:
+                    merged[key] = {"id": nid, "name": nm}
+                else:
+                    # Prefer to keep an id if we have one, and a non-empty name if we have one.
+                    if nid and not merged[key].get("id"):
+                        merged[key]["id"] = nid
+                    if nm and not merged[key].get("name"):
+                        merged[key]["name"] = nm
+
+        _add(sdk_nodes)
+        _add(rest_nodes)
+        out = [v for v in merged.values() if v.get("id") and v.get("name")]
+        if out:
+            return out
+        return sdk_nodes or rest_nodes or []
 
     def _reset_switch_nodes_via_air(self, topology_dir: Path, switch_configs_dir: str | None = None) -> bool:
         """
