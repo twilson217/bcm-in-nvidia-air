@@ -154,6 +154,27 @@ def _ensure_iso_at(iso_src: Path, iso_dest: Path, mode: str, force: bool) -> Non
         raise ValueError(f"Unknown mode: {mode}")
 
 
+def _stage_collection_patch(bcm_version_full: str) -> Optional[Path]:
+    """
+    If a per-version collection patch exists in this repo (scripts/patches/<ver>.py),
+    copy it to /home/ubuntu/bcm_patches/<ver>.py where scripts/bcm_install.sh expects it.
+
+    Returns the staged patch path if staged, else None.
+    """
+    if os.getenv("BCM_SKIP_COLLECTION_PATCH", "").strip().lower() in ("1", "true", "yes"):
+        return None
+
+    src = REPO_ROOT / "scripts" / "patches" / f"{bcm_version_full}.py"
+    if not src.exists():
+        return None
+
+    dst_dir = Path("/home/ubuntu/bcm_patches")
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / src.name
+    shutil.copy2(src, dst)
+    return dst
+
+
 def _render_bcm_install_sh(
     *,
     bcm_version_full: str,
@@ -255,6 +276,12 @@ def main() -> int:
         print(f"installer110 pin: {installer110_pin or '(required but not determined)'}")
     if args.single_nic:
         print(f"ℹ single-NIC mode: externalnet will NOT be created; internalnet uses {args.management_interface}")
+
+    # If there is a known per-version collection patch (e.g. BCM 11.31.0 Slurm selection fix),
+    # stage it where bcm_install.sh expects it.
+    staged_patch = _stage_collection_patch(bcm_version)
+    if staged_patch:
+        print(f"Staged collection patch: {staged_patch}")
 
     iso_dest = Path(args.iso_dest)
     _ensure_iso_at(iso_src, iso_dest, mode=args.iso_mode, force=args.force)

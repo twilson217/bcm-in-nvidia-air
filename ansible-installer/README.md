@@ -46,6 +46,7 @@ Notes:
 - The wrapper will (by default) create a **symlink** to your ISO at `/home/ubuntu/bcm.iso` (where our `scripts/bcm_install.sh` expects it). Use `--iso-mode copy` to copy instead.
 - If `/home/ubuntu/bcm.iso` already exists and you want to replace it, add `--force`.
 - For BCM 11.x, if the script cannot determine a safe Galaxy pin, the install will **fail fast** rather than silently using “latest”.
+- If a per-version installer patch exists in this repo (e.g. `scripts/patches/11.31.0.py`), the wrapper will automatically stage it under `/home/ubuntu/bcm_patches/` so `bcm_install.sh` can apply it.
 
 ### Logs
 - The main Ansible run logs to: `/home/ubuntu/ansible_bcm_install.log`
