@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import json
+import pwd
 from pathlib import Path
 from typing import Optional
 
@@ -168,7 +169,7 @@ def _stage_collection_patch(bcm_version_full: str) -> Optional[Path]:
     if not src.exists():
         return None
 
-    dst_dir = Path("/home/ubuntu/bcm_patches")
+    dst_dir = Path(os.environ.get("BCM_PATCH_DIR") or "/home/ubuntu/bcm_patches")
     dst_dir.mkdir(parents=True, exist_ok=True)
     dst = dst_dir / src.name
     shutil.copy2(src, dst)
@@ -235,7 +236,12 @@ def main() -> int:
     p.add_argument("--internalnet-base", default="", help="internalnet base (optional; used by our template)")
     p.add_argument("--internalnet-prefixlen", default="", help="internalnet prefixlen (optional; used by our template)")
 
-    p.add_argument("--iso-dest", default="/home/ubuntu/bcm.iso", help="Where bcm_install.sh expects the ISO")
+    p.add_argument(
+        "--run-user",
+        default="",
+        help="Non-root user whose home directory will store ISO/logs (default: SUDO_USER, else ubuntu, else root).",
+    )
+    p.add_argument("--iso-dest", default="", help="Where bcm_install.sh expects the ISO (default: <run-user-home>/bcm.iso)")
     p.add_argument("--iso-mode", choices=["symlink", "copy"], default="symlink", help="How to place ISO at --iso-dest")
     p.add_argument("--force", action="store_true", help="Overwrite --iso-dest if it already exists")
 
@@ -277,13 +283,36 @@ def main() -> int:
     if args.single_nic:
         print(f"ℹ single-NIC mode: externalnet will NOT be created; internalnet uses {args.management_interface}")
 
+    # Determine a "run user" for where we stage ISO/patches/logs. The install itself runs as root
+    # (via sudo), but many of our scripts historically used /home/ubuntu paths.
+    run_user = (args.run_user or "").strip()
+    if not run_user:
+        run_user = (os.environ.get("SUDO_USER") or "").strip() or "ubuntu"
+    try:
+        run_home = Path(pwd.getpwnam(run_user).pw_dir).resolve()
+    except Exception:
+        # Fallback to root if ubuntu (or provided user) doesn't exist.
+        run_user = "root"
+        run_home = Path(pwd.getpwnam(run_user).pw_dir).resolve()
+
+    iso_dest = Path((args.iso_dest or "").strip() or str(run_home / "bcm.iso"))
+    patch_dir = Path(str(run_home / "bcm_patches"))
+
+    # Pass these through to bcm_install.sh and our patch staging helper.
+    os.environ["BCM_RUN_USER"] = run_user
+    os.environ["BCM_USER_HOME"] = str(run_home)
+    os.environ["BCM_ISO_PATH"] = str(iso_dest)
+    os.environ["BCM_PATCH_DIR"] = str(patch_dir)
+    os.environ.setdefault("ANSIBLE_LOG_PATH", str(run_home / "ansible_bcm_install.log"))
+
+    print(f"Run user: {run_user} (home={run_home})")
+
     # If there is a known per-version collection patch (e.g. BCM 11.31.0 Slurm selection fix),
     # stage it where bcm_install.sh expects it.
     staged_patch = _stage_collection_patch(bcm_version)
     if staged_patch:
         print(f"Staged collection patch: {staged_patch}")
 
-    iso_dest = Path(args.iso_dest)
     _ensure_iso_at(iso_src, iso_dest, mode=args.iso_mode, force=args.force)
     print(f"ISO ready at: {iso_dest}")
 
@@ -310,7 +339,7 @@ def main() -> int:
         return 0
 
     print("\nRunning installer... (this can take a while)")
-    proc = subprocess.run(["/usr/bin/env", "bash", str(out)], text=True)
+    proc = subprocess.run(["/usr/bin/env", "bash", str(out)], text=True, env=os.environ.copy())
     return int(proc.returncode)
 
 

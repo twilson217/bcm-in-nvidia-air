@@ -21,7 +21,16 @@ BCM_MANAGEMENT_INTERFACE="__MANAGEMENT_INTERFACE__"  # Internal cluster network 
 BCM_INTERNALNET_IP="__INTERNALNET_IP__"
 BCM_INTERNALNET_BASE="__INTERNALNET_BASE__"
 BCM_INTERNALNET_PREFIXLEN="__INTERNALNET_PREFIXLEN__"
-BCM_ISO_PATH="/home/ubuntu/bcm.iso"
+# NOTE: historically this script assumed /home/ubuntu. For non-Air installs, allow overriding
+# paths via environment variables and/or a different "run user".
+: "${BCM_RUN_USER:=ubuntu}"
+BCM_USER_HOME="$(getent passwd "${BCM_RUN_USER}" | cut -d: -f6 || true)"
+if [ -z "${BCM_USER_HOME}" ]; then
+  BCM_USER_HOME="/home/${BCM_RUN_USER}"
+fi
+: "${BCM_ISO_PATH:=${BCM_USER_HOME}/bcm.iso}"
+: "${BCM_PATCH_DIR:=${BCM_USER_HOME}/bcm_patches}"
+: "${ANSIBLE_LOG_PATH:=${BCM_USER_HOME}/ansible_bcm_install.log}"
 BCM_MOUNT_PATH="/mnt/dvd"  # Ansible mounts ISO here
 
 # Determine collection name based on version
@@ -125,7 +134,7 @@ echo "  ✓ ISO found at $BCM_ISO_PATH (Ansible will handle mounting)"
 
 # Step 6: Create BCM Ansible installer (self-contained, no external repo needed)
 echo "[Step 6/10] Setting up BCM Ansible installer..."
-BCM_INSTALLER_DIR="/home/ubuntu/bcm-ansible-installer"
+BCM_INSTALLER_DIR="${BCM_USER_HOME}/bcm-ansible-installer"
 mkdir -p "${BCM_INSTALLER_DIR}/inventory"
 mkdir -p "${BCM_INSTALLER_DIR}/group_vars/head_node"
 cd "${BCM_INSTALLER_DIR}"
@@ -188,7 +197,7 @@ echo "  ✓ Ansible installer ready"
 
 # Step 7: Install BCM Ansible Galaxy collection
 echo "[Step 7/10] Installing Ansible Galaxy collection: ${BCM_COLLECTION}..."
-export ANSIBLE_LOG_PATH=/home/ubuntu/ansible_bcm_install.log
+export ANSIBLE_LOG_PATH="${ANSIBLE_LOG_PATH}"
 # Install required Ansible collections.
 #
 # NOTE: The Bright installer roles use modules from community collections like:
@@ -223,12 +232,12 @@ echo "  ✓ Collections installed: ${BCM_COLLECTION}, community.general, communi
 
 apply_collection_version_patch() {
     local col_dir=""
-    local patch_file="/home/ubuntu/bcm_patches/${BCM_FULL_VERSION}.py"
+    local patch_file="${BCM_PATCH_DIR}/${BCM_FULL_VERSION}.py"
 
     # Collection can be installed under root or ubuntu, depending on how this script is executed.
     local candidates=(
         "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
-        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "${BCM_USER_HOME}/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
     )
 
     # No patch for this BCM full version -> nothing to do.
@@ -274,7 +283,7 @@ patch_collection_remove_pkg() {
     # Collection can be installed under root or ubuntu, depending on how this script is executed.
     local candidates=(
         "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
-        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "${BCM_USER_HOME}/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
     )
 
     for d in "${candidates[@]}"; do
@@ -352,7 +361,7 @@ patch_collection_insert_ignore_errors_for_task() {
 
     local candidates=(
         "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
-        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "${BCM_USER_HOME}/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
     )
 
     for d in "${candidates[@]}"; do
@@ -442,7 +451,7 @@ patch_collection_add_retries_for_license_url() {
 
     local candidates=(
         "/root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
-        "/home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
+        "${BCM_USER_HOME}/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.}"
     )
 
     for d in "${candidates[@]}"; do
@@ -606,7 +615,7 @@ fi
 # If CMDaemon successfully writes cert.pem/cert.key but exits with rc=-11, Ansible fails.
 # We treat that task as non-fatal; later tasks will still fail if certs truly aren't created.
 export TASK_NAME="Generating webinterface certificate"
-export FILES="$(grep -RIl -- "name: ${TASK_NAME}" /root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.} 2>/dev/null || true; grep -RIl -- "name: ${TASK_NAME}" /home/ubuntu/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.} 2>/dev/null || true)"
+export FILES="$(grep -RIl -- "name: ${TASK_NAME}" /root/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.} 2>/dev/null || true; grep -RIl -- "name: ${TASK_NAME}" ${BCM_USER_HOME}/.ansible/collections/ansible_collections/brightcomputing/${BCM_COLLECTION#brightcomputing.} 2>/dev/null || true)"
 patch_collection_insert_ignore_errors_for_task "${TASK_NAME}"
 
 
@@ -614,10 +623,10 @@ patch_collection_insert_ignore_errors_for_task "${TASK_NAME}"
 echo "[Step 8/10] Creating BCM configuration..."
 
 # Create group_vars directory structure
-mkdir -p /home/ubuntu/bcm-ansible-installer/group_vars/head_node
+mkdir -p "${BCM_INSTALLER_DIR}/group_vars/head_node"
 
 # Create cluster-credentials.yml
-cat > /home/ubuntu/bcm-ansible-installer/group_vars/head_node/cluster-credentials.yml <<CREDS
+cat > "${BCM_INSTALLER_DIR}/group_vars/head_node/cluster-credentials.yml" <<CREDS
 ---
 # Cluster credentials (auto-generated)
 product_key: ${BCM_PRODUCT_KEY}
@@ -634,7 +643,7 @@ CREDS
 # Interface mapping (detected from topology by deploy_bcm_air.py):
 #   external_interface = outbound connection (for internet access via DHCP)
 #   management_interface = oob-mgmt-switch connection (BCM internal network 192.168.200.0/24)
-cat > /home/ubuntu/bcm-ansible-installer/group_vars/head_node/cluster-settings.yml <<SETTINGS
+cat > "${BCM_INSTALLER_DIR}/group_vars/head_node/cluster-settings.yml" <<SETTINGS
 ---
 # General cluster settings (auto-generated from topology)
 external_interface: ${BCM_EXTERNAL_INTERFACE}
@@ -673,7 +682,7 @@ echo "  External interface: ${BCM_EXTERNAL_INTERFACE} (outbound/DHCP)"
 echo "  Internalnet interface: ${BCM_MANAGEMENT_INTERFACE} (${BCM_INTERNALNET_BASE}/${BCM_INTERNALNET_PREFIXLEN} -> ${BCM_INTERNALNET_IP})"
 
 # Create post_install_user_tasks.yml for DNS fixes
-cat > /home/ubuntu/bcm-ansible-installer/post_install_user_tasks.yml <<POSTTASKS
+cat > "${BCM_INSTALLER_DIR}/post_install_user_tasks.yml" <<POSTTASKS
 ---
 - name: Add DNSSEC validation configuration
   ansible.builtin.blockinfile:
@@ -706,21 +715,21 @@ echo "  ✓ Configuration files created"
 
 # Step 9: Run BCM Ansible playbook
 echo "[Step 9/10] Running BCM installation playbook..."
-echo "  This will take 30-45 minutes. Check /home/ubuntu/ansible_bcm_install.log for progress."
+echo "  This will take 30-45 minutes. Check ${ANSIBLE_LOG_PATH} for progress."
 echo ""
 
-cd /home/ubuntu/bcm-ansible-installer
+cd "${BCM_INSTALLER_DIR}"
 source venv/bin/activate
 
-ansible-playbook -i inventory/hosts playbook.yml 2>&1 | tee -a /home/ubuntu/ansible_bcm_install.log
+ansible-playbook -i inventory/hosts playbook.yml 2>&1 | tee -a "${ANSIBLE_LOG_PATH}"
 
 # Check if installation succeeded
-if grep -q "failed=0" /home/ubuntu/ansible_bcm_install.log; then
+if grep -q "failed=0" "${ANSIBLE_LOG_PATH}"; then
     echo ""
     echo "  ✓ BCM Ansible playbook completed successfully"
 else
     echo ""
-    echo "  ⚠ BCM installation may have had errors. Check /home/ubuntu/ansible_bcm_install.log"
+    echo "  ⚠ BCM installation may have had errors. Check ${ANSIBLE_LOG_PATH}"
 fi
 
 # Step 10: Post-installation configuration
@@ -867,7 +876,7 @@ echo "  - GUI:  https://<bcm-ip>:8081/base-view"
 echo "  - User: root"
 echo "  - Pass: (your configured password)"
 echo ""
-echo "Log file: /home/ubuntu/ansible_bcm_install.log"
+echo "Log file: ${ANSIBLE_LOG_PATH}"
 echo "Finished at: $(date)"
 echo "=============================================="
 
