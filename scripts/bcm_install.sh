@@ -649,9 +649,6 @@ cat > "${BCM_INSTALLER_DIR}/group_vars/head_node/cluster-settings.yml" <<SETTING
 external_interface: ${BCM_EXTERNAL_INTERFACE}
 external_ip_address: DHCP
 management_interface: ${BCM_MANAGEMENT_INTERFACE}
-management_ip_address: ${BCM_INTERNALNET_IP}
-management_network_baseaddress: ${BCM_INTERNALNET_BASE}
-management_network_netmask: ${BCM_INTERNALNET_PREFIXLEN}
 install_medium: dvd
 install_medium_dvd_path: "${BCM_ISO_PATH}"
 timezone: UTC
@@ -678,8 +675,26 @@ license:
   cluster_name: bcm-air-lab
   mac: "{{ ansible_default_ipv4.macaddress }}"
 SETTINGS
+
+# IMPORTANT:
+# If BCM_INTERNALNET_* values are empty, do NOT write nulls into cluster-settings.yml.
+# Nulls override the collection defaults and can break templating (e.g. ipmath on None).
+if [ -n "${BCM_INTERNALNET_IP}" ]; then
+  echo "management_ip_address: ${BCM_INTERNALNET_IP}" >> "${BCM_INSTALLER_DIR}/group_vars/head_node/cluster-settings.yml"
+fi
+if [ -n "${BCM_INTERNALNET_BASE}" ]; then
+  echo "management_network_baseaddress: ${BCM_INTERNALNET_BASE}" >> "${BCM_INSTALLER_DIR}/group_vars/head_node/cluster-settings.yml"
+fi
+if [ -n "${BCM_INTERNALNET_PREFIXLEN}" ]; then
+  echo "management_network_netmask: ${BCM_INTERNALNET_PREFIXLEN}" >> "${BCM_INSTALLER_DIR}/group_vars/head_node/cluster-settings.yml"
+fi
+
 echo "  External interface: ${BCM_EXTERNAL_INTERFACE} (outbound/DHCP)"
-echo "  Internalnet interface: ${BCM_MANAGEMENT_INTERFACE} (${BCM_INTERNALNET_BASE}/${BCM_INTERNALNET_PREFIXLEN} -> ${BCM_INTERNALNET_IP})"
+if [ -n "${BCM_INTERNALNET_BASE}" ] || [ -n "${BCM_INTERNALNET_PREFIXLEN}" ] || [ -n "${BCM_INTERNALNET_IP}" ]; then
+  echo "  Internalnet interface: ${BCM_MANAGEMENT_INTERFACE} (${BCM_INTERNALNET_BASE}/${BCM_INTERNALNET_PREFIXLEN} -> ${BCM_INTERNALNET_IP})"
+else
+  echo "  Internalnet interface: ${BCM_MANAGEMENT_INTERFACE} (internalnet addressing not provided; using installer defaults)"
+fi
 
 # Create post_install_user_tasks.yml for DNS fixes
 cat > "${BCM_INSTALLER_DIR}/post_install_user_tasks.yml" <<POSTTASKS
