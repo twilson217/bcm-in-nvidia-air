@@ -336,6 +336,81 @@ def patch_installer110_patch_cluster_tools_before_cm_create_image(col_dir: Path)
     return True
 
 
+def patch_installer110_ignore_cluster_tools_patch_failure(col_dir: Path) -> bool:
+    """
+    Newer installer110 versions include a post-install workaround task named:
+      "Apply cluster-tools patch for affected versions"
+
+    That task uses ansible.builtin.patch and can fail with:
+      PatchError: N out of M hunks FAILED
+
+    This often happens when upstream cluster-tools content differs slightly (or a patch
+    was already applied in a newer release). Since this is a best-effort workaround,
+    treat it as non-fatal by adding ignore_errors: true to that task.
+    """
+    task_name = "Apply cluster-tools patch for affected versions"
+
+    changed = False
+
+    def _patch_file(path: Path) -> bool:
+        nonlocal changed
+        try:
+            lines = path.read_text(encoding="utf-8", errors="strict").splitlines(keepends=True)
+        except Exception:
+            return False
+
+        out: list[str] = []
+        i = 0
+        file_changed = False
+        while i < len(lines):
+            line = lines[i]
+            # Look for the task name, tolerate indentation.
+            if line.lstrip().startswith(f"- name: {task_name}"):
+                indent = line[: len(line) - len(line.lstrip())]
+                out.append(line)
+
+                # If ignore_errors already exists in this task block, do nothing.
+                j = i + 1
+                already = False
+                while j < len(lines):
+                    nxt = lines[j]
+                    # Next task at same indentation -> stop scanning this task block.
+                    if nxt.startswith(indent + "- name:"):
+                        break
+                    if nxt.lstrip().startswith("ignore_errors:"):
+                        already = True
+                        break
+                    j += 1
+
+                if not already:
+                    out.append(f"{indent}  ignore_errors: true\n")
+                    file_changed = True
+                    changed = True
+
+                i += 1
+                continue
+
+            out.append(line)
+            i += 1
+
+        if file_changed:
+            try:
+                path.write_text("".join(out), encoding="utf-8")
+                return True
+            except Exception:
+                return False
+        return False
+
+    touched = 0
+    for p in list(col_dir.rglob("*.yml")) + list(col_dir.rglob("*.yaml")):
+        if _patch_file(p):
+            touched += 1
+
+    if changed:
+        print(f"✓ Patched installer110 to ignore failures in cluster-tools patch task ({touched} file(s))")
+    return changed
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--collection-dir", required=True, help="Installed Ansible collection directory")
@@ -465,6 +540,13 @@ def main() -> int:
             changed_files.append(col_dir / "roles/head_node/tasks/post_install/software_images/create.yml")
     except Exception as e:
         print(f"⚠ Failed to patch installer110 cm-create-image pre-step: {e}")
+
+    # 4d) installer110: tolerate failures in the upstream "Apply cluster-tools patch..." workaround
+    try:
+        if patch_installer110_ignore_cluster_tools_patch_failure(col_dir):
+            total_changes += 1
+    except Exception as e:
+        print(f"⚠ Failed to patch installer110 cluster-tools workaround to ignore errors: {e}")
 
     # 5) cluster-tools: cm-create-image APT DVD repo template hardcodes dgx-os
     try:
