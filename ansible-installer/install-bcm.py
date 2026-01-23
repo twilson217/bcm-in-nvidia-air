@@ -255,6 +255,14 @@ def main() -> int:
         print(f"  Try: sudo -E {sys.executable} {Path(__file__).resolve()} {' '.join(sys.argv[1:])}", file=sys.stderr)
         return 2
 
+    # If invoked with sudo -E, HOME can remain set to the invoking user, which can confuse
+    # Ansible roles that derive paths from ansible_env.HOME while other helper scripts assume
+    # root's home is /root. Keep it sane.
+    if os.geteuid() == 0:
+        home = (os.environ.get("HOME") or "").strip()
+        if home and home != "/root":
+            print(f"⚠ Note: HOME={home} while running as root. Consider using `sudo -H -E ...`.")
+
     iso_src = Path(args.iso).expanduser().resolve()
     bcm_version = (args.bcm_version or "").strip()
     if not bcm_version:

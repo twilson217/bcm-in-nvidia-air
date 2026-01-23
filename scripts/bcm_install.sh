@@ -31,6 +31,22 @@ fi
 : "${BCM_ISO_PATH:=${BCM_USER_HOME}/bcm.iso}"
 : "${BCM_PATCH_DIR:=${BCM_USER_HOME}/bcm_patches}"
 : "${ANSIBLE_LOG_PATH:=${BCM_USER_HOME}/ansible_bcm_install.log}"
+
+# IMPORTANT:
+# Some users run this script via `sudo -E`, which can preserve HOME from the invoking user.
+# The installer110 role derives build_config_path from ansible_env.HOME, while other helper
+# scripts assume root's home is /root. If HOME is not consistent, handlers can fail with:
+#   /root/cm/build-config.xml does not exist.
+#
+# Make HOME consistent for the effective user (usually root).
+if [ "$(id -u)" -eq 0 ]; then
+  _ROOT_HOME="$(getent passwd root | cut -d: -f6 || true)"
+  if [ -n "${_ROOT_HOME}" ]; then
+    export HOME="${_ROOT_HOME}"
+  else
+    export HOME="/root"
+  fi
+fi
 BCM_MOUNT_PATH="/mnt/dvd"  # Ansible mounts ISO here
 
 # Determine collection name based on version
