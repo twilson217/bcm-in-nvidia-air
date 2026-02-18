@@ -61,22 +61,20 @@
                 admin-edge: on
                 auto-edge: on
                 bpdu-guard: on
-        description: bcm-02
+        description: user-k8s-01
         evpn:
           multihoming:
             segment:
               df-preference: 50000
               enable: on
               local-id: 32
-              mac-address: 02:00:00:00:01:02
+              mac-address: 02:00:00:00:01:15
         type: bond
       bond3:
         bond:
           lacp-bypass: on
-          lacp-rate: fast
           member:
             swp33: {}
-          mode: lacp
         bridge:
           domain:
             br_default:
@@ -85,13 +83,14 @@
                 admin-edge: on
                 auto-edge: on
                 bpdu-guard: on
+        description: user-k8s-02
         evpn:
           multihoming:
             segment:
               df-preference: 50000
               enable: on
               local-id: 37
-              mac-address: 02:00:00:00:01:03
+              mac-address: 02:00:00:00:01:16
         type: bond
       bond11:
         bond:
@@ -181,6 +180,94 @@
               local-id: 36
               mac-address: 02:00:00:00:01:14
         type: bond
+      bond15:
+        bond:
+          lacp-bypass: on
+          member:
+            swp34: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: admin-k8s-01
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 38
+              mac-address: 02:00:00:00:01:17
+        type: bond
+      bond16:
+        bond:
+          lacp-bypass: on
+          member:
+            swp35: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: admin-k8s-02
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 39
+              mac-address: 02:00:00:00:01:18
+        type: bond
+      bond17:
+        bond:
+          lacp-bypass: on
+          member:
+            swp36: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: admin-k8s-03
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 40
+              mac-address: 02:00:00:00:01:19
+        type: bond
+      bond18:
+        bond:
+          lacp-bypass: on
+          member:
+            swp37: {}
+        bridge:
+          domain:
+            br_default:
+              access: 101
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: user-k8s-03
+        evpn:
+          multihoming:
+            segment:
+              df-preference: 50000
+              enable: on
+              local-id: 41
+              mac-address: 02:00:00:00:01:1A
+        type: bond
       eth0:
         description: mgmt-leaf-02:swp30
         ip:
@@ -210,6 +297,14 @@
         link:
           state:
             up: {}
+        type: swp
+      swp34:
+        type: swp
+      swp35:
+        type: swp
+      swp36:
+        type: swp
+      swp37:
         type: swp
       swp61:
         description: spine-01:swp1
