@@ -1,0 +1,4 @@
+# networking.cmsh - Configure BCM networking (bonding, routes, etc.)
+# Uncomment and modify the examples below as needed.
+
+cmsh -c "device;remove node001;commit"

@@ -1,0 +1,103 @@
+- header:
+    model: vx
+    nvue-api-version: nvue_v1
+    rev-id: 1.0
+    version: Cumulus Linux 5.11.0
+- set:
+    bridge:
+      domain:
+        br_default:
+          mac-address: 02:00:00:00:00:11
+          stp:
+            priority: 28672
+            state:
+              up: {}
+          vlan:
+            '100': {}
+    interface:
+      swp1:
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: cpu-01
+        type: swp
+      swp2:
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: cpu-02
+        type: swp
+      swp31:
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: bcm-01
+        type: swp
+      swp32:
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: user-k8s-01
+        type: swp
+      swp34:
+        bridge:
+          domain:
+            br_default:
+              access: 100
+              stp:
+                admin-edge: on
+                auto-edge: on
+                bpdu-guard: on
+        description: admin-k8s-01
+        type: swp
+      vlan100:
+        description: INTERNALNET_192.168.200.0/24
+        ip:
+          address:
+            192.168.200.2/24: {}
+          vrf: INBAND
+          vrr:
+            address:
+              192.168.200.1/24: {}
+            enable: on
+            state:
+              up: {}
+        link:
+          mac-address: 02:00:00:00:00:11
+        type: svi
+        vlan: 100
+    system:
+      api:
+        state: enabled
+      hostname: leaf-01
+      ssh-server:
+        state: enabled
+    vrf:
+      INBAND:
+        router:
+          static:
+            default:
+              address-family: ipv4-unicast
+              via:
+                192.168.200.254:
+                  type: ipv4-address

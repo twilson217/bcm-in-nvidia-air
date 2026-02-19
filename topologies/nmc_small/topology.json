@@ -1,0 +1,345 @@
+{
+    "format": "JSON",
+    "title": "NMC Lab",
+    "ztp": null,
+    "content": {
+        "nodes": {
+            "admin-k8s-01": {
+                "nic_model": "virtio",
+                "cpu": 10,
+                "memory": 16384,
+                "storage": 100,
+                "positioning": {
+                    "x": 1375,
+                    "y": 0
+                },
+                "os": "pxe",
+                "features": {
+                    "uefi": false,
+                    "tpm": false
+                },
+                "pxehost": true,
+                "secureboot": false,
+                "oob": false,
+                "emulation_type": null,
+                "network_pci": {},
+                "cpu_options": [
+                    "ssse3",
+                    "sse4.1",
+                    "sse4.2"
+                ],
+                "storage_pci": {}
+            },
+            "bcm-01": {
+                "nic_model": "e1000",
+                "cpu": 4,
+                "memory": 8192,
+                "storage": 100,
+                "positioning": {
+                    "x": 1100,
+                    "y": 0
+                },
+                "os": "generic/ubuntu2404",
+                "features": {
+                    "uefi": false,
+                    "tpm": false
+                },
+                "pxehost": false,
+                "secureboot": false,
+                "oob": false,
+                "emulation_type": null,
+                "network_pci": {},
+                "cpu_options": [
+                    "ssse3",
+                    "sse4.1",
+                    "sse4.2"
+                ],
+                "storage_pci": {}
+            },
+            "cpu-01": {
+                "nic_model": "virtio",
+                "cpu": 2,
+                "memory": 4096,
+                "storage": 40,
+                "positioning": {
+                    "x": 1925,
+                    "y": 0
+                },
+                "os": "pxe",
+                "features": {
+                    "uefi": false,
+                    "tpm": false
+                },
+                "pxehost": true,
+                "secureboot": false,
+                "oob": false,
+                "emulation_type": null,
+                "network_pci": {},
+                "cpu_options": [
+                    "ssse3",
+                    "sse4.1",
+                    "sse4.2"
+                ],
+                "storage_pci": {}
+            },
+            "cpu-02": {
+                "nic_model": "virtio",
+                "cpu": 2,
+                "memory": 4096,
+                "storage": 40,
+                "positioning": {
+                    "x": 2200,
+                    "y": 0
+                },
+                "os": "pxe",
+                "features": {
+                    "uefi": false,
+                    "tpm": false
+                },
+                "pxehost": true,
+                "secureboot": false,
+                "oob": false,
+                "emulation_type": null,
+                "network_pci": {},
+                "cpu_options": [
+                    "ssse3",
+                    "sse4.1",
+                    "sse4.2"
+                ],
+                "storage_pci": {}
+            },
+            "leaf-01": {
+                "cpu": 2,
+                "memory": 8192,
+                "storage": 10,
+                "positioning": {
+                    "x": 1650,
+                    "y": -275
+                },
+                "os": "cumulus-vx-5.11.0",
+                "features": {
+                    "uefi": false,
+                    "tpm": false
+                },
+                "pxehost": false,
+                "secureboot": false,
+                "oob": false,
+                "emulation_type": null,
+                "network_pci": {},
+                "cpu_options": [],
+                "storage_pci": {}
+            },
+            "user-k8s-01": {
+                "nic_model": "virtio",
+                "cpu": 10,
+                "memory": 16384,
+                "storage": 100,
+                "positioning": {
+                    "x": 1650,
+                    "y": 0
+                },
+                "os": "pxe",
+                "features": {
+                    "uefi": false,
+                    "tpm": false
+                },
+                "pxehost": true,
+                "secureboot": false,
+                "oob": false,
+                "emulation_type": null,
+                "network_pci": {},
+                "cpu_options": [],
+                "storage_pci": {}
+            }
+        },
+        "links": [
+            [
+                {
+                    "interface": "eth0",
+                    "node": "admin-k8s-01",
+                    "mac": "48:B0:2D:07:E3:A7",
+                    "network_pci": null
+                },
+                {
+                    "interface": "swp34",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:FC:93:22",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                }
+            ],
+            [
+                {
+                    "interface": "eth1",
+                    "node": "bcm-01",
+                    "mac": "48:B0:2D:7C:57:26",
+                    "network_pci": null
+                },
+                {
+                    "interface": "swp31",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:5F:EF:2E",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                }
+            ],
+            [
+                {
+                    "interface": "eth0",
+                    "node": "cpu-01",
+                    "mac": "48:B0:2D:45:D8:A9",
+                    "network_pci": null
+                },
+                {
+                    "interface": "swp1",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:09:3F:E6",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                }
+            ],
+            [
+                {
+                    "interface": "eth0",
+                    "node": "cpu-02",
+                    "mac": "48:B0:2D:5D:15:E8",
+                    "network_pci": null
+                },
+                {
+                    "interface": "swp2",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:C8:D3:F2",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                }
+            ],
+            [
+                {
+                    "interface": "swp32",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:AD:B3:33",
+                    "network_pci": null
+                },
+                {
+                    "interface": "eth0",
+                    "node": "user-k8s-01",
+                    "mac": "48:B0:2D:7E:0A:7C",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                }
+            ],
+            [
+                {
+                    "interface": "eth0",
+                    "node": "bcm-01",
+                    "mac": "48:B0:2D:00:00:00",
+                    "network_pci": null
+                },
+                "outbound"
+            ],
+            [
+                {
+                    "interface": "eth1",
+                    "node": "admin-k8s-01",
+                    "mac": "48:B0:2D:7B:F1:05",
+                    "network_pci": null
+                },
+                "outbound"
+            ],
+            [
+                {
+                    "interface": "eth1",
+                    "node": "cpu-01",
+                    "mac": "48:B0:2D:B6:18:31",
+                    "network_pci": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "eth1",
+                    "node": "cpu-02",
+                    "mac": "48:B0:2D:1C:C9:74",
+                    "network_pci": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "swp3",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:32:67:B7",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "swp4",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:47:54:EC",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "swp61",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:00:00:33",
+                    "network_pci": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "swp62",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:00:00:35",
+                    "network_pci": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "swp63",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:00:00:37",
+                    "network_pci": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "swp64",
+                    "node": "leaf-01",
+                    "mac": "48:B0:2D:00:00:39",
+                    "network_pci": null
+                },
+                "unconnected"
+            ],
+            [
+                {
+                    "interface": "eth1",
+                    "node": "user-k8s-01",
+                    "mac": "48:B0:2D:FA:54:B0",
+                    "network_pci": null,
+                    "interface_role": null,
+                    "scalable_unit": null
+                },
+                "outbound"
+            ]
+        ],
+        "oob": false,
+        "netq": false
+    }
+}

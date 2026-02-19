@@ -1,0 +1,5 @@
+# switches_v10.cmsh - Add switches to BCM 10.x and configure ZTP
+# Small topology: leaf-01 only (in-band mgmt on vlan100 / internalnet)
+
+cmsh -c "device;add switch leaf-01;set mac 48:b0:2d:00:00:16;set network internalnet;set ip 192.168.200.2;set hasclientdaemon yes;set cumulusmode file;set cumulusfile startup.yaml;ztpsettings;set runztponeachboot no;set enableapi yes;set enableexternalaccessapi yes;commit"
+cmsh -c "device initialize leaf-01"
