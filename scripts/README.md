@@ -46,6 +46,10 @@ python scripts/topology_validation.py topologies/*.json  # Validate multiple
 ### `bcm_install.sh`
 **Purpose**: Install BCM on the head node. This script runs **remotely on the BCM VM**, not locally.
 
+**Related local-only workflow (no Air API)**:
+- Use `local-installer/install-bcm.py` to install BCM on a head node you can SSH into
+- Use `local-installer/run-post-install.py` to run topology `features.yaml` actions locally
+
 **How it works**:
 1. `deploy_bcm_air.py` uploads this script to the BCM head node
 2. Placeholders (`__PASSWORD__`, `__BCM_VERSION__`, etc.) are replaced with actual values
@@ -56,7 +60,7 @@ python scripts/topology_validation.py topologies/*.json  # Validate multiple
 2. Installs system dependencies (Python, MySQL, etc.)
 3. Applies Ubuntu 24.04 workaround for BCM 10.x (libglapi-amber/mesa conflict)
 4. Secures MySQL installation
-5. Clones bcm-ansible-installer from GitHub
+5. Creates a local installer workdir at `~/bcm-ansible-installer/` (this is a *remote* working directory name on the head node; it is unrelated to this repo’s `local-installer/` folder)
 6. Installs Bright Computing Ansible Galaxy collection
 7. Patches collection for compatibility issues
 8. Generates configuration files (`cluster-settings.yml`, `cluster-credentials.yml`)

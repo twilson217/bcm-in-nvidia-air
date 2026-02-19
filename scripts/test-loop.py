@@ -229,7 +229,7 @@ def _download_failure_logs(test_key: str, ssh_config: Optional[str], sim_name: O
         # Check if bcm_install.sh exists and get any error output
         result = subprocess.run(
             ["ssh", "-F", str(ssh_config_path), "air-bcm-01", 
-             "ls -la /home/ubuntu/bcm_install.sh 2>&1; ls -la /home/ubuntu/bcm-ansible-installer/ 2>&1 || echo 'No bcm-ansible-installer dir'"],
+             "ls -la /home/ubuntu/bcm_install.sh 2>&1; ls -la /home/ubuntu/bcm-ansible-installer/ 2>&1 || echo 'No bcm-ansible-installer workdir'"],
             capture_output=True,
             text=True,
             timeout=30,
