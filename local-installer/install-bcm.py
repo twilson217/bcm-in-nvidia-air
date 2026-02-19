@@ -32,6 +32,111 @@ from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_INTERNALNET_BASE = "192.168.200.0"
+DEFAULT_INTERNALNET_PREFIXLEN = "24"
+DEFAULT_INTERNALNET_IP = "192.168.200.254"
+
+
+def _list_net_ifaces() -> list[str]:
+    """
+    Return a best-effort list of physical-ish NIC names on the current system.
+
+    We keep this intentionally simple and conservative; it is used only for defaults and validation.
+    """
+    try:
+        names = sorted(os.listdir("/sys/class/net"))
+    except Exception:
+        names = []
+
+    out: list[str] = []
+    for n in names:
+        if n == "lo":
+            continue
+        # Filter out common virtual/bridge/tunnel interfaces.
+        if n.startswith(("docker", "br-", "veth", "virbr", "cni", "flannel", "wg", "tun", "tap")):
+            continue
+        out.append(n)
+    return out
+
+
+def _choose_default_interfaces(*, single_nic: bool) -> tuple[str, str]:
+    """
+    Pick external + management interface names for the current system.
+
+    Heuristics:
+      - Prefer eth0/eth1 (new AIR)
+      - Fall back to ens3/ens4 (older AIR / some clouds)
+      - Fall back to first/second NIC from /sys/class/net
+    """
+    nics = _list_net_ifaces()
+
+    def pick_one(candidates: list[str]) -> str:
+        for c in candidates:
+            if c in nics:
+                return c
+        return ""
+
+    if single_nic:
+        # In single NIC mode, externalnet is disabled; we only need a management interface.
+        mgmt = pick_one(["eth0", "ens3"]) or (nics[0] if nics else "")
+        return ("", mgmt)
+
+    external = pick_one(["eth0", "ens3"]) or (nics[0] if nics else "")
+    mgmt = pick_one(["eth1", "ens4"])
+    if not mgmt:
+        # Prefer a different NIC from external when possible.
+        for c in nics:
+            if c and c != external:
+                mgmt = c
+                break
+    return (external, mgmt)
+
+
+def _validate_interfaces(*, external_interface: str, management_interface: str, single_nic: bool) -> None:
+    ext = (external_interface or "").strip()
+    mgmt = (management_interface or "").strip()
+    nics = _list_net_ifaces()
+
+    if not mgmt:
+        raise ValueError("management_interface is empty after detection/arguments.")
+    if mgmt not in nics:
+        raise ValueError(f"management_interface '{mgmt}' does not exist on this system. Detected: {', '.join(nics) or '(none)'}")
+
+    if not single_nic:
+        if not ext:
+            raise ValueError("external_interface is empty (required unless --single-nic is used).")
+        if ext not in nics:
+            raise ValueError(f"external_interface '{ext}' does not exist on this system. Detected: {', '.join(nics) or '(none)'}")
+        if ext == mgmt:
+            raise ValueError(f"external_interface and management_interface are both '{ext}'. Use --single-nic or choose two distinct NICs.")
+
+
+def _normalize_internalnet_args(*, ip: str, base: str, prefixlen: str) -> tuple[str, str, str]:
+    ip_s = (ip or "").strip()
+    base_s = (base or "").strip()
+    pre_s = (prefixlen or "").strip()
+
+    any_set = bool(ip_s or base_s or pre_s)
+    all_set = bool(ip_s and base_s and pre_s)
+
+    if any_set and not all_set:
+        raise ValueError(
+            "Internalnet values must be provided as a complete set: "
+            "--internalnet-ip, --internalnet-base, and --internalnet-prefixlen. "
+            "Alternatively, omit all three to use the defaults."
+        )
+
+    if not any_set:
+        return (DEFAULT_INTERNALNET_IP, DEFAULT_INTERNALNET_BASE, DEFAULT_INTERNALNET_PREFIXLEN)
+
+    # Basic sanity
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip_s):
+        raise ValueError(f"Invalid --internalnet-ip: {ip_s}")
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", base_s):
+        raise ValueError(f"Invalid --internalnet-base: {base_s}")
+    if not re.match(r"^\d{1,2}$", pre_s):
+        raise ValueError(f"Invalid --internalnet-prefixlen: {pre_s}")
+    return (ip_s, base_s, pre_s)
 
 
 def _parse_bcm_version_from_iso_name(iso_path: str) -> str:
@@ -225,16 +330,24 @@ def main() -> int:
     p.add_argument("--password", required=True, help="Default password to configure during install")
     p.add_argument("--admin-email", default="admin@example.com", help="Admin email to set in BCM")
 
-    p.add_argument("--external-interface", default="ens3", help="Outbound interface (DHCP) on the head node")
-    p.add_argument("--management-interface", default="ens4", help="Internal cluster network interface (internalnet)")
+    p.add_argument(
+        "--external-interface",
+        default="auto",
+        help="Outbound interface (DHCP) on the head node. Use 'auto' to detect (default).",
+    )
+    p.add_argument(
+        "--management-interface",
+        default="auto",
+        help="Internal cluster network interface (internalnet). Use 'auto' to detect (default).",
+    )
     p.add_argument(
         "--single-nic",
         action="store_true",
         help="Single-NIC mode: do NOT create BCM externalnet. Uses only --management-interface for internalnet; leaves external_interface empty.",
     )
-    p.add_argument("--internalnet-ip", default="", help="internalnet IP for bond0 (optional; used by our template)")
-    p.add_argument("--internalnet-base", default="", help="internalnet base (optional; used by our template)")
-    p.add_argument("--internalnet-prefixlen", default="", help="internalnet prefixlen (optional; used by our template)")
+    p.add_argument("--internalnet-ip", default="", help="internalnet IP for the head node (default: 192.168.200.254)")
+    p.add_argument("--internalnet-base", default="", help="internalnet base address (default: 192.168.200.0)")
+    p.add_argument("--internalnet-prefixlen", default="", help="internalnet prefixlen (default: 24)")
 
     p.add_argument(
         "--run-user",
@@ -247,6 +360,11 @@ def main() -> int:
 
     p.add_argument("--script-out", default="/tmp/bcm_install.sh", help="Where to write the rendered install script")
     p.add_argument("--dry-run", action="store_true", help="Render/prepare but do not execute install script")
+    p.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Validate inputs and auto-detect defaults, then exit without writing files or running the installer.",
+    )
 
     args = p.parse_args()
 
@@ -277,6 +395,38 @@ def main() -> int:
         # management interface if the underlying network provides it.
         args.external_interface = ""
 
+    # Auto-detect interface names unless explicitly provided.
+    ext = (args.external_interface or "").strip()
+    mgmt = (args.management_interface or "").strip()
+    if ext.lower() == "auto" or mgmt.lower() == "auto":
+        d_ext, d_mgmt = _choose_default_interfaces(single_nic=bool(args.single_nic))
+        if ext.lower() == "auto":
+            ext = d_ext
+        if mgmt.lower() == "auto":
+            mgmt = d_mgmt
+    args.external_interface = ext
+    args.management_interface = mgmt
+
+    # Internalnet: require complete override set, else use deterministic defaults.
+    args.internalnet_ip, args.internalnet_base, args.internalnet_prefixlen = _normalize_internalnet_args(
+        ip=args.internalnet_ip, base=args.internalnet_base, prefixlen=args.internalnet_prefixlen
+    )
+
+    # Validate chosen NICs before touching CMD/installer.
+    try:
+        _validate_interfaces(
+            external_interface=args.external_interface,
+            management_interface=args.management_interface,
+            single_nic=bool(args.single_nic),
+        )
+    except Exception as e:
+        nics = _list_net_ifaces()
+        print(f"✗ Network interface validation failed: {e}", file=sys.stderr)
+        if nics:
+            print(f"  Detected NICs: {', '.join(nics)}", file=sys.stderr)
+        print("  Tip: pass explicit flags like --external-interface eth0 --management-interface eth1", file=sys.stderr)
+        return 2
+
     installer110_pin: Optional[str] = None
     if bcm_version.startswith("11."):
         try:
@@ -290,6 +440,12 @@ def main() -> int:
         print(f"installer110 pin: {installer110_pin or '(required but not determined)'}")
     if args.single_nic:
         print(f"ℹ single-NIC mode: externalnet will NOT be created; internalnet uses {args.management_interface}")
+    print(f"Interfaces: external={args.external_interface or '(disabled)'}  management={args.management_interface}")
+    print(f"Internalnet: {args.internalnet_base}/{args.internalnet_prefixlen} -> {args.internalnet_ip}")
+
+    if args.preflight:
+        print("\nPreflight complete (no changes made).")
+        return 0
 
     # Determine a "run user" for where we stage ISO/patches/logs. The install itself runs as root
     # (via sudo), but many of our scripts historically used /home/ubuntu paths.

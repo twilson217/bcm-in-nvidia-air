@@ -24,8 +24,19 @@ sudo -E python3 local-installer/install-bcm.py \
   --product-key '<YOUR_BCM_PRODUCT_KEY>' \
   --password '<YOUR_ADMIN_PASSWORD>' \
   --admin-email 'admin@example.com' \
-  --external-interface ens3 \
-  --management-interface ens4
+  --external-interface auto \
+  --management-interface auto
+```
+
+By default, the script uses **auto-detection** for NIC names (works for both `eth*` and `ens*` naming). If you need to override:
+
+```bash
+sudo -E python3 local-installer/install-bcm.py \
+  --iso /path/to/BCM-11.30.0.iso \
+  --product-key '<YOUR_BCM_PRODUCT_KEY>' \
+  --password '<YOUR_ADMIN_PASSWORD>' \
+  --external-interface eth0 \
+  --management-interface eth1
 ```
 
 3. Run local post-install actions (optional, driven by your topology `features.yaml`):
@@ -46,7 +57,7 @@ sudo -E python3 local-installer/install-bcm.py \
   --iso /path/to/BCM-11.30.0.iso \
   --product-key '<YOUR_BCM_PRODUCT_KEY>' \
   --password '<YOUR_ADMIN_PASSWORD>' \
-  --management-interface ens3 \
+  --management-interface auto \
   --single-nic
 ```
 
