@@ -108,8 +108,22 @@ def _run_cmsh_script(path: Path) -> None:
     if not path.exists():
         raise FileNotFoundError(f"cmsh script not found: {path}")
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    for ln in lines:
-        _run_cmsh_line(ln)
+    for idx, ln in enumerate(lines, start=1):
+        try:
+            _run_cmsh_line(ln)
+        except subprocess.CalledProcessError as e:
+            s = (ln or "").strip()
+            print(f"✗ cmsh script failed: {path} (line {idx})", file=sys.stderr)
+            if s:
+                print(f"  line: {s}", file=sys.stderr)
+            print(f"  exit code: {e.returncode}", file=sys.stderr)
+            print("", file=sys.stderr)
+            print(
+                "Tip: if cmsh reports \"there were uncommitted changes\", you can usually clear it with:\n"
+                f"  {CMSH_BIN} -c \"device;discard\"",
+                file=sys.stderr,
+            )
+            raise
 
 
 def _sync_switch_configs_dir(local_dir: Path) -> None:

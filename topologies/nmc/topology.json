@@ -23,7 +23,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "admin-k8s-02": {
@@ -45,7 +45,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "admin-k8s-03": {
@@ -67,7 +67,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "bcm-01": {
@@ -89,7 +89,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "cpu-01": {
@@ -111,7 +111,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "cpu-02": {
@@ -133,7 +133,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "cpu-03": {
@@ -155,7 +155,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "cpu-04": {
@@ -177,7 +177,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": ["ssse3", "sse4.1", "sse4.2"],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "leaf-01": {
@@ -327,7 +327,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": [],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "user-k8s-02": {
@@ -349,7 +349,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": [],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             },
             "user-k8s-03": {
@@ -371,7 +371,7 @@
                 "oob": false,
                 "emulation_type": null,
                 "network_pci": {},
-                "cpu_options": [],
+                "cpu_options": ["ssse3", "sse4.1", "sse4.2", "popcnt"],
                 "storage_pci": {}
             }
         },

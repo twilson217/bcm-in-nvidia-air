@@ -2,11 +2,11 @@
 # Uncomment and modify the examples below as needed.
 
 cmsh -c "category use default; set disksetup /cm/local/apps/cmd/etc/htdocs/disk-setup/x86_64-slave-one-big-partition-xfs.xml; commit"
-cmsh -c "device;add physicalnode cpu-01 192.168.200.11 ens8;set category default;interfaces;add physical ens8;set mac 48:B0:2D:45:D8:A9;set network internalnet;set ip 192.168.200.11;..;add physical ens9;set mac 48:B0:2D:B6:18:31;..;..;set provisioninginterface ens8;set mac 48:B0:2D:45:D8:A9;commit"
+cmsh -c "device;add physicalnode cpu-01 192.168.200.11;use cpu-01;set category default;interfaces;add physical ens8;set mac 48:B0:2D:45:D8:A9;set network internalnet;set ip 192.168.200.11;..;add physical ens9;set mac 48:B0:2D:B6:18:31;..;..;set provisioninginterface ens8;set mac 48:B0:2D:45:D8:A9;commit"
 cmsh -c "device;use cpu-01;interfaces;remove bootif;commit"
-cmsh -c "device;add physicalnode cpu-02 192.168.200.12 ens8;set category default;interfaces;add physical ens8;set mac 48:B0:2D:5D:15:E8;set network internalnet;set ip 192.168.200.12;..;add physical ens9;set mac 48:B0:2D:1C:C9:74;..;..;set provisioninginterface ens8;set mac 48:B0:2D:5D:15:E8;commit"
+cmsh -c "device;add physicalnode cpu-02 192.168.200.12;use cpu-02;set category default;interfaces;add physical ens8;set mac 48:B0:2D:5D:15:E8;set network internalnet;set ip 192.168.200.12;..;add physical ens9;set mac 48:B0:2D:1C:C9:74;..;..;set provisioninginterface ens8;set mac 48:B0:2D:5D:15:E8;commit"
 cmsh -c "device;use cpu-02;interfaces;remove bootif;commit"
-cmsh -c "device;add physicalnode user-k8s-01 192.168.200.15 ens8;set category default;interfaces;add physical ens8;set mac 48:B0:2D:7E:0A:7C;set network internalnet;set ip 192.168.200.15;..;add physical ens9;set mac 48:B0:2D:FA:54:B0;..;..;set provisioninginterface ens8;set mac 48:B0:2D:7E:0A:7C;commit"
+cmsh -c "device;add physicalnode user-k8s-01 192.168.200.15;use user-k8s-01;set category default;interfaces;add physical ens8;set mac 48:B0:2D:7E:0A:7C;set network internalnet;set ip 192.168.200.15;..;add physical ens9;set mac 48:B0:2D:FA:54:B0;..;..;set provisioninginterface ens8;set mac 48:B0:2D:7E:0A:7C;commit"
 cmsh -c "device;use user-k8s-01;interfaces;remove bootif;commit"
-cmsh -c "device;add physicalnode admin-k8s-01 192.168.200.17 ens8;set category default;interfaces;add physical ens8;set mac 48:B0:2D:07:E3:A7;set network internalnet;set ip 192.168.200.17;..;add physical ens9;set mac 48:B0:2D:7B:F1:05;..;..;set provisioninginterface ens8;set mac 48:B0:2D:07:E3:A7;commit"
+cmsh -c "device;add physicalnode admin-k8s-01 192.168.200.17;use admin-k8s-01;set category default;interfaces;add physical ens8;set mac 48:B0:2D:07:E3:A7;set network internalnet;set ip 192.168.200.17;..;add physical ens9;set mac 48:B0:2D:7B:F1:05;..;..;set provisioninginterface ens8;set mac 48:B0:2D:07:E3:A7;commit"
 cmsh -c "device;use admin-k8s-01;interfaces;remove bootif;commit"
