@@ -3,8 +3,7 @@
 NVIDIA Air BCM Deployment Automation
 
 This script automates the deployment of Base Command Manager (BCM) on NVIDIA Air
-using stock Ubuntu 24.04 images and Ansible Galaxy playbooks.
-"""
+using stock Ubuntu 24.04 images and Ansible Galaxy playbooks.  """
 
 import os
 import sys
@@ -17,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 import requests
 from dotenv import load_dotenv
-
 try:
     import yaml
 except ImportError:
@@ -156,7 +154,8 @@ class AirBCMDeployer:
                  non_interactive=False, progress_tracker=None,
                  skip_cloud_init: bool = False,
                  skip_ssh_service: bool = False,
-                 no_sdk: bool = False):
+                 no_sdk: bool = False,
+                 organization=None):
         """
         Initialize the deployer
         
@@ -182,6 +181,7 @@ class AirBCMDeployer:
         
         self.api_token = api_token or os.getenv('AIR_API_TOKEN')
         self.username = username or os.getenv('AIR_USERNAME')
+        self.organization = organization or os.getenv('AIR_ORGANIZATION_UUID')
         
         if not self.api_token:
             print("\n✗ Error: AIR_API_TOKEN not found")
@@ -225,6 +225,10 @@ class AirBCMDeployer:
             'Authorization': f'Bearer {self.jwt_token}',
             'Content-Type': 'application/json'
         }
+
+        # Validate that the organization UUID is valid.
+        self.organization_name = self._validate_organization()
+
         self.simulation_id = None
         self.bcm_node_id = None
     
@@ -310,6 +314,27 @@ class AirBCMDeployer:
             print(f"  3. For internal Air, ensure you're connected to VPN")
             raise
         
+    def _validate_organization(self):
+        """
+        Validates the organization UUID by querying the API.
+        Returns the organization name if valid, otherwise raises a ValueError.
+        """
+        response = requests.get(
+            f"{self.api_base_url}/api/v1/organization/{self.organization}",
+            headers=self.headers,
+            timeout=30
+        )
+        result = response.json()
+
+        if "detail" in result:
+            raise ValueError(f"Invalid organization UUID: {result['detail']}")
+
+        if "name" not in result:
+            raise ValueError(f"Unexpected response from organization endpoint: {result}")
+
+        return result["name"]
+        
+
     def scan_available_isos(self):
         """
         Scan .iso/ directory and return available BCM ISOs with version info.
@@ -889,7 +914,13 @@ class AirBCMDeployer:
         
         # Override title with our simulation name
         topology_data['title'] = simulation_name
+        
+        if self.organization:
+            print(f"Found valid organization {self.organization_name}. Simulation will be created as part of this organization")
+            topology_data['organization'] = self.organization
+
         payload = topology_data
+
         content_size = len(json.dumps(topology_data))
         
         try:
@@ -2755,6 +2786,10 @@ Examples:
         action='store_true',
         help='Do not use air-sdk even if installed; use REST-only (isolation/debug)'
     )
+    parser.add_argument(
+        '--air-organization-uuid',
+        help='UUID of an existing Air organization, under which to create the simulation'
+    )
     
     args = parser.parse_args()
     
@@ -2765,6 +2800,12 @@ Examples:
         api_base_url = 'https://air-inside.nvidia.com'
     else:
         api_base_url = os.getenv('AIR_API_URL', 'https://air.nvidia.com')
+
+    # If Air Organization UUID is not set from the command line set it from env var or None
+    if args.air_organization_uuid:
+        air_organization_uuid = args.air_organization_uuid
+    else:
+        air_organization_uuid = os.getenv('AIR_ORGANIZATION_UUID', None)
     
     try:
         # Initialize progress tracker
@@ -2808,6 +2849,7 @@ Examples:
                 skip_cloud_init=args.skip_cloud_init,
                 skip_ssh_service=args.skip_ssh_service,
                 no_sdk=args.no_sdk,
+                organization=air_organization_uuid,
             )
         except Exception as e:
             # Authentication errors are already printed with troubleshooting info
